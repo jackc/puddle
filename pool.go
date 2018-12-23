@@ -305,3 +305,35 @@ func (p *Pool) Return(res interface{}) {
 	p.cond.L.Unlock()
 	p.cond.Signal()
 }
+
+// Remove removes res from the pool and closes it. If res is not part of the
+// pool Remove will panic.
+func (p *Pool) Remove(res interface{}) {
+	p.cond.L.Lock()
+	defer p.cond.L.Unlock()
+
+	rw, present := p.allResources[res]
+	if !present {
+		panic("Remove called on resource that does not belong to pool")
+	}
+
+	delete(p.allResources, rw.resource)
+
+	// close the resource in the background
+	go func() {
+		err := p.closeRes(res)
+		if err != nil {
+			p.cond.L.Lock()
+			p.backgroundErrorHandler(err)
+			p.cond.L.Unlock()
+		}
+	}()
+
+	// Maintain min pool size (unless pool is already closed)
+	if !p.closed {
+		for len(p.allResources) < p.minSize {
+			createResChan, createErrChan := p.startCreate()
+			p.backgroundFinishCreate(createResChan, createErrChan)
+		}
+	}
+}

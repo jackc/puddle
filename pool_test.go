@@ -223,6 +223,161 @@ func TestPoolReturnClosesResourcePoolIsAlreadyClosed(t *testing.T) {
 	assert.Equal(t, len(resources), closeCalls.Value())
 }
 
+func TestPoolRemovePanicsIfResourceNotPartOfPool(t *testing.T) {
+	var createCalls Counter
+	createFunc := func() (interface{}, error) {
+		return createCalls.Next(), nil
+	}
+	pool := puddle.NewPool(createFunc, stubCloseRes)
+
+	assert.Panics(t, func() { pool.Remove(42) })
+}
+
+func TestPoolRemoveRemovesResourceFromPool(t *testing.T) {
+	var createCalls Counter
+	createFunc := func() (interface{}, error) {
+		return createCalls.Next(), nil
+	}
+	pool := puddle.NewPool(createFunc, stubCloseRes)
+
+	res, err := pool.Get(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 1, res)
+
+	assert.Equal(t, 1, pool.Size())
+	pool.Remove(res)
+	assert.Equal(t, 0, pool.Size())
+}
+
+func TestPoolRemoveRemovesResourceFromPoolAndStartsNewCreationToMaintainMinSize(t *testing.T) {
+	createCallsChan := make(chan int, 4)
+	closeCallsChan := make(chan int, 4)
+
+	waitForRead := func(ch chan int) bool {
+		select {
+		case <-ch:
+			return true
+		case <-time.NewTimer(time.Second).C:
+			return false
+		}
+	}
+
+	var createCalls Counter
+	createFunc := func() (interface{}, error) {
+		n := createCalls.Next()
+		createCallsChan <- n
+		return n, nil
+	}
+
+	var closeCalls Counter
+	closeFunc := func(interface{}) error {
+		n := closeCalls.Next()
+		closeCallsChan <- n
+		return nil
+	}
+
+	pool := puddle.NewPool(createFunc, closeFunc)
+
+	// Ensure there are 2 resources available in pool
+	{
+		r1, err := pool.Get(context.Background())
+		require.Nil(t, err)
+		r2, err := pool.Get(context.Background())
+		require.Nil(t, err)
+		pool.Return(r1)
+		pool.Return(r2)
+	}
+
+	assert.Equal(t, 2, pool.Size())
+	pool.SetMinSize(2)
+	assert.Equal(t, 2, pool.Size())
+
+	{
+		r1, err := pool.Get(context.Background())
+		require.Nil(t, err)
+		r2, err := pool.Get(context.Background())
+		require.Nil(t, err)
+		pool.Remove(r1)
+		pool.Remove(r2)
+	}
+
+	require.True(t, waitForRead(createCallsChan))
+	require.True(t, waitForRead(createCallsChan))
+	require.True(t, waitForRead(createCallsChan))
+	require.True(t, waitForRead(createCallsChan))
+	require.True(t, waitForRead(closeCallsChan))
+	require.True(t, waitForRead(closeCallsChan))
+
+	assert.Equal(t, 2, pool.Size())
+	assert.Equal(t, 4, createCalls.Value())
+	assert.Equal(t, 2, closeCalls.Value())
+}
+
+func TestPoolRemoveRemovesResourceFromPoolAndDoesNotStartNewCreationToMaintainMinSizeWhenPoolIsClosed(t *testing.T) {
+	createCallsChan := make(chan int, 4)
+	closeCallsChan := make(chan int, 4)
+
+	waitForRead := func(ch chan int) bool {
+		select {
+		case <-ch:
+			return true
+		case <-time.NewTimer(time.Second).C:
+			return false
+		}
+	}
+
+	var createCalls Counter
+	createFunc := func() (interface{}, error) {
+		n := createCalls.Next()
+		createCallsChan <- n
+		return n, nil
+	}
+
+	var closeCalls Counter
+	closeFunc := func(interface{}) error {
+		n := closeCalls.Next()
+		closeCallsChan <- n
+		return nil
+	}
+
+	pool := puddle.NewPool(createFunc, closeFunc)
+
+	// Ensure there are 2 resources available in pool
+	{
+		r1, err := pool.Get(context.Background())
+		require.Nil(t, err)
+		r2, err := pool.Get(context.Background())
+		require.Nil(t, err)
+		pool.Return(r1)
+		pool.Return(r2)
+	}
+
+	assert.Equal(t, 2, pool.Size())
+	pool.SetMinSize(2)
+	assert.Equal(t, 2, pool.Size())
+
+	{
+		r1, err := pool.Get(context.Background())
+		require.Nil(t, err)
+		r2, err := pool.Get(context.Background())
+		require.Nil(t, err)
+
+		pool.Close()
+
+		pool.Remove(r1)
+		pool.Remove(r2)
+	}
+
+	require.True(t, waitForRead(createCallsChan))
+	require.True(t, waitForRead(createCallsChan))
+	require.True(t, waitForRead(closeCallsChan))
+	require.True(t, waitForRead(closeCallsChan))
+
+	assert.Equal(t, 0, pool.Size())
+	assert.Equal(t, 2, createCalls.Value())
+	assert.Equal(t, 2, closeCalls.Value())
+}
+
 func TestPoolGetReturnsErrorWhenPoolIsClosed(t *testing.T) {
 	var createCalls Counter
 	createFunc := func() (interface{}, error) {
