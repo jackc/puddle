@@ -226,6 +226,103 @@ func TestPoolGetReturnsErrorWhenPoolIsClosed(t *testing.T) {
 	assert.Nil(t, res)
 }
 
+func TestPoolGetLateFailedCreateErrorIsReported(t *testing.T) {
+	errCreateStartedChan := make(chan struct{})
+	createWaitChan := make(chan struct{})
+	errCreateFailed := errors.New("create failed")
+	var createCalls Counter
+	createFunc := func() (interface{}, error) {
+		n := createCalls.Next()
+		if n == 1 {
+			return n, nil
+		}
+		close(errCreateStartedChan)
+		<-createWaitChan
+		return nil, errCreateFailed
+	}
+	pool := puddle.NewPool(createFunc, stubCloseRes)
+
+	asyncErrChan := make(chan error)
+	pool.SetBackgroundErrorHandler(func(err error) { asyncErrChan <- err })
+
+	res1, err := pool.Get(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 1, res1)
+
+	go func() {
+		<-errCreateStartedChan
+		pool.Return(res1)
+	}()
+
+	res, err := pool.Get(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 1, res)
+	close(createWaitChan)
+
+	select {
+	case err = <-asyncErrChan:
+		assert.Equal(t, errCreateFailed, err)
+	case <-time.NewTimer(time.Second).C:
+		t.Fatal("timed out waiting for async error")
+	}
+}
+
+func TestPoolCloseResourceCloseErrorIsReported(t *testing.T) {
+	var createCalls Counter
+	createFunc := func() (interface{}, error) {
+		return createCalls.Next(), nil
+	}
+	errCloseFailed := errors.New("close failed")
+	closeFunc := func(res interface{}) error { return errCloseFailed }
+	pool := puddle.NewPool(createFunc, closeFunc)
+	asyncErrChan := make(chan error, 1)
+	pool.SetBackgroundErrorHandler(func(err error) { asyncErrChan <- err })
+
+	// Get and return a resource to put something in the pool
+	res, err := pool.Get(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 1, res)
+	pool.Return(res)
+
+	pool.Close()
+
+	select {
+	case err = <-asyncErrChan:
+		assert.Equal(t, errCloseFailed, err)
+	default:
+		t.Fatal("error not reported")
+	}
+}
+
+func TestPoolReturnClosesResourcePoolIsAlreadyClosedErrorIsReported(t *testing.T) {
+	var createCalls Counter
+	createFunc := func() (interface{}, error) {
+		return createCalls.Next(), nil
+	}
+
+	errCloseFailed := errors.New("close failed")
+	closeFunc := func(res interface{}) error { return errCloseFailed }
+	pool := puddle.NewPool(createFunc, closeFunc)
+
+	asyncErrChan := make(chan error, 1)
+	pool.SetBackgroundErrorHandler(func(err error) { asyncErrChan <- err })
+
+	// Get and return a resource to put something in the pool
+	res, err := pool.Get(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 1, res)
+
+	pool.Close()
+
+	pool.Return(res)
+	select {
+	case err = <-asyncErrChan:
+		assert.Equal(t, errCloseFailed, err)
+	default:
+		t.Fatal("error not reported")
+	}
+}
+
 func BenchmarkPoolGetAndReturnNoContention(b *testing.B) {
 	var createCalls Counter
 	createFunc := func() (interface{}, error) {
