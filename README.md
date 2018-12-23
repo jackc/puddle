@@ -13,3 +13,4 @@ Puddle is a generic resource pool library for Go.
 * Remove resource (instead of just return to pool)
 * Reset pool
 * Shrink pool
+* Stress test
