@@ -50,6 +50,16 @@ func TestPoolGetCreatesResourceWhenNoneAvailable(t *testing.T) {
 	pool.Return(res)
 }
 
+func TestPoolSetMinSizeImmediatelyCreatesNewResources(t *testing.T) {
+	var createCalls Counter
+	createFunc := func() (interface{}, error) {
+		return createCalls.Next(), nil
+	}
+	pool := puddle.NewPool(createFunc, stubCloseRes)
+	pool.SetMinSize(2)
+	assert.Equal(t, 2, pool.Size())
+}
+
 func TestPoolGetDoesNotCreatesResourceWhenItWouldExceedMaxSize(t *testing.T) {
 	var createCalls Counter
 	createFunc := func() (interface{}, error) {

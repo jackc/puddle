@@ -37,6 +37,7 @@ type Pool struct {
 
 	allResources       map[interface{}]*resourceWrapper
 	availableResources []*resourceWrapper
+	minSize            int
 	maxSize            int
 	closed             bool
 
@@ -82,6 +83,30 @@ func (p *Pool) Size() int {
 	n := len(p.allResources)
 	p.cond.L.Unlock()
 	return n
+}
+
+// MinSize returns the current minimum size of the pool.
+func (p *Pool) MinSize() int {
+	p.cond.L.Lock()
+	n := p.minSize
+	p.cond.L.Unlock()
+	return n
+}
+
+// SetMinSize sets the minimum size of the pool. It panics if n < 0.
+func (p *Pool) SetMinSize(n int) {
+	if n < 0 {
+		panic("pool MinSize cannot be < 0")
+	}
+	p.cond.L.Lock()
+	p.minSize = n
+
+	for len(p.allResources) < p.minSize {
+		createResChan, createErrChan := p.startCreate()
+		p.backgroundFinishCreate(createResChan, createErrChan)
+	}
+
+	p.cond.L.Unlock()
 }
 
 // MaxSize returns the current maximum size of the pool.

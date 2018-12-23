@@ -4,7 +4,6 @@ Puddle is a generic resource pool library for Go.
 
 ## TODO
 
-* Min pool size
 * Max resource lifetime
 * Max resource uses
 * Max resource idle time
