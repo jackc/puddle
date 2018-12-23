@@ -2,6 +2,7 @@ package pool
 
 import (
 	"context"
+	"errors"
 	"sync"
 )
 
@@ -14,7 +15,11 @@ const (
 const maxUint = ^uint(0)
 const maxInt = int(maxUint >> 1)
 
+// ErrClosedPool occurs on an attempt to get a connection from a closed pool.
+var ErrClosedPool = errors.New("cannot get from closed pool")
+
 type CreateFunc func() (res interface{}, err error)
+type CloseFunc func(res interface{}) (err error)
 
 type resourceWrapper struct {
 	resource interface{}
@@ -28,17 +33,34 @@ type Pool struct {
 	allResources       map[interface{}]*resourceWrapper
 	availableResources []*resourceWrapper
 	maxSize            int
+	closed             bool
 
-	create CreateFunc
+	create   CreateFunc
+	closeRes CloseFunc
 }
 
-func New(create CreateFunc) *Pool {
+func New(create CreateFunc, closeRes CloseFunc) *Pool {
 	return &Pool{
 		cond:         sync.NewCond(new(sync.Mutex)),
 		allResources: make(map[interface{}]*resourceWrapper),
 		maxSize:      maxInt,
 		create:       create,
+		closeRes:     closeRes,
 	}
+}
+
+// Close closes all resources in the pool and rejects future Get calls.
+// Unavailable resources will be closes when they are returned to the pool.
+func (p *Pool) Close() {
+	p.cond.L.Lock()
+	p.closed = true
+
+	for _, rw := range p.availableResources {
+		p.closeRes(rw.resource)
+		// TODO - something with error
+		delete(p.allResources, rw.resource)
+	}
+	p.cond.L.Unlock()
 }
 
 // Size returns the current size of the pool.
@@ -81,6 +103,11 @@ func (p *Pool) Get(ctx context.Context) (interface{}, error) {
 	}
 
 	p.cond.L.Lock()
+
+	if p.closed {
+		p.cond.L.Unlock()
+		return nil, ErrClosedPool
+	}
 
 	// If a resource is available now
 	if len(p.availableResources) > 0 {
@@ -179,6 +206,14 @@ func (p *Pool) Return(res interface{}) {
 	if !present {
 		p.cond.L.Unlock()
 		panic("Return called on resource that does not belong to pool")
+	}
+
+	if p.closed {
+		p.closeRes(rw.resource)
+		// TODO - something with error
+		delete(p.allResources, rw.resource)
+		p.cond.L.Unlock()
+		return
 	}
 
 	rw.status = resourceStatusAvailable
