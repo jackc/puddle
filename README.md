@@ -1,10 +1,9 @@
-# Pool
+# Puddle
 
-is a generic resource pool.
+Puddle is a generic resource pool library for Go.
 
 ## TODO
 
-* Permanent name
 * Error reporting for async errors
 * Min pool size
 * Max resource lifetime

@@ -1,4 +1,4 @@
-package pool_test
+package puddle_test
 
 import (
 	"context"
@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pool"
+	"github.com/jackc/puddle"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -41,7 +41,7 @@ func TestPoolGetCreatesResourceWhenNoneAvailable(t *testing.T) {
 	createFunc := func() (interface{}, error) {
 		return createCalls.Next(), nil
 	}
-	pool := pool.New(createFunc, stubCloseRes)
+	pool := puddle.NewPool(createFunc, stubCloseRes)
 
 	res, err := pool.Get(context.Background())
 	require.NoError(t, err)
@@ -55,7 +55,7 @@ func TestPoolGetDoesNotCreatesResourceWhenItWouldExceedMaxSize(t *testing.T) {
 	createFunc := func() (interface{}, error) {
 		return createCalls.Next(), nil
 	}
-	pool := pool.New(createFunc, stubCloseRes)
+	pool := puddle.NewPool(createFunc, stubCloseRes)
 	pool.SetMaxSize(1)
 
 	wg := &sync.WaitGroup{}
@@ -84,7 +84,7 @@ func TestPoolGetReturnsErrorFromFailedResourceCreate(t *testing.T) {
 	createFunc := func() (interface{}, error) {
 		return nil, errCreateFailed
 	}
-	pool := pool.New(createFunc, stubCloseRes)
+	pool := puddle.NewPool(createFunc, stubCloseRes)
 
 	res, err := pool.Get(context.Background())
 	assert.Equal(t, errCreateFailed, err)
@@ -96,7 +96,7 @@ func TestPoolGetReusesResources(t *testing.T) {
 	createFunc := func() (interface{}, error) {
 		return createCalls.Next(), nil
 	}
-	pool := pool.New(createFunc, stubCloseRes)
+	pool := puddle.NewPool(createFunc, stubCloseRes)
 
 	res, err := pool.Get(context.Background())
 	require.NoError(t, err)
@@ -117,7 +117,7 @@ func TestPoolGetContextAlreadyCanceled(t *testing.T) {
 	createFunc := func() (interface{}, error) {
 		panic("should never be called")
 	}
-	pool := pool.New(createFunc, stubCloseRes)
+	pool := puddle.NewPool(createFunc, stubCloseRes)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -135,7 +135,7 @@ func TestPoolGetContextCanceledDuringCreate(t *testing.T) {
 		time.Sleep(1 * time.Second)
 		return createCalls.Next(), nil
 	}
-	pool := pool.New(createFunc, stubCloseRes)
+	pool := puddle.NewPool(createFunc, stubCloseRes)
 
 	res, err := pool.Get(ctx)
 	assert.Equal(t, context.Canceled, err)
@@ -147,7 +147,7 @@ func TestPoolReturnPanicsIfResourceNotPartOfPool(t *testing.T) {
 	createFunc := func() (interface{}, error) {
 		return createCalls.Next(), nil
 	}
-	pool := pool.New(createFunc, stubCloseRes)
+	pool := puddle.NewPool(createFunc, stubCloseRes)
 
 	assert.Panics(t, func() { pool.Return(42) })
 }
@@ -164,7 +164,7 @@ func TestPoolCloseClosesAllAvailableResources(t *testing.T) {
 		return nil
 	}
 
-	p := pool.New(createFunc, closeFunc)
+	p := puddle.NewPool(createFunc, closeFunc)
 
 	resources := make([]interface{}, 4)
 	for i := range resources {
@@ -194,7 +194,7 @@ func TestPoolReturnClosesResourcePoolIsAlreadyClosed(t *testing.T) {
 		return nil
 	}
 
-	p := pool.New(createFunc, closeFunc)
+	p := puddle.NewPool(createFunc, closeFunc)
 
 	resources := make([]interface{}, 4)
 	for i := range resources {
@@ -218,11 +218,11 @@ func TestPoolGetReturnsErrorWhenPoolIsClosed(t *testing.T) {
 	createFunc := func() (interface{}, error) {
 		return createCalls.Next(), nil
 	}
-	p := pool.New(createFunc, stubCloseRes)
-	p.Close()
+	pool := puddle.NewPool(createFunc, stubCloseRes)
+	pool.Close()
 
-	res, err := p.Get(context.Background())
-	assert.Equal(t, pool.ErrClosedPool, err)
+	res, err := pool.Get(context.Background())
+	assert.Equal(t, puddle.ErrClosedPool, err)
 	assert.Nil(t, res)
 }
 
@@ -231,7 +231,7 @@ func BenchmarkPoolGetAndReturnNoContention(b *testing.B) {
 	createFunc := func() (interface{}, error) {
 		return createCalls.Next(), nil
 	}
-	pool := pool.New(createFunc, stubCloseRes)
+	pool := puddle.NewPool(createFunc, stubCloseRes)
 
 	for i := 0; i < b.N; i++ {
 		res, err := pool.Get(context.Background())
@@ -250,7 +250,7 @@ func BenchmarkPoolGetAndReturnHeavyContention(b *testing.B) {
 	createFunc := func() (interface{}, error) {
 		return createCalls.Next(), nil
 	}
-	pool := pool.New(createFunc, stubCloseRes)
+	pool := puddle.NewPool(createFunc, stubCloseRes)
 	pool.SetMaxSize(poolSize)
 
 	doneChan := make(chan struct{})

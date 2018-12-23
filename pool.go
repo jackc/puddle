@@ -1,4 +1,4 @@
-package pool
+package puddle
 
 import (
 	"context"
@@ -39,7 +39,7 @@ type Pool struct {
 	closeRes CloseFunc
 }
 
-func New(create CreateFunc, closeRes CloseFunc) *Pool {
+func NewPool(create CreateFunc, closeRes CloseFunc) *Pool {
 	return &Pool{
 		cond:         sync.NewCond(new(sync.Mutex)),
 		allResources: make(map[interface{}]*resourceWrapper),
