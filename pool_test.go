@@ -3,6 +3,7 @@ package pool_test
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -11,11 +12,32 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type Counter struct {
+	mutex sync.Mutex
+	n     int
+}
+
+// Next increments the counter and returns the value
+func (c *Counter) Next() int {
+	c.mutex.Lock()
+	c.n += 1
+	n := c.n
+	c.mutex.Unlock()
+	return n
+}
+
+// Value returns the counter
+func (c *Counter) Value() int {
+	c.mutex.Lock()
+	n := c.n
+	c.mutex.Unlock()
+	return n
+}
+
 func TestPoolGet_CreatesResourceWhenNoneAvailable(t *testing.T) {
-	createCalls := 0
+	var createCalls Counter
 	createFunc := func() (interface{}, error) {
-		createCalls += 1
-		return createCalls, nil
+		return createCalls.Next(), nil
 	}
 	pool := pool.New(createFunc)
 
@@ -24,6 +46,35 @@ func TestPoolGet_CreatesResourceWhenNoneAvailable(t *testing.T) {
 	assert.Equal(t, 1, res)
 
 	pool.Return(res)
+}
+
+func TestPoolGet_DoesNotCreatesResourceWhenItWouldExceedMaxSize(t *testing.T) {
+	var createCalls Counter
+	createFunc := func() (interface{}, error) {
+		return createCalls.Next(), nil
+	}
+	pool := pool.New(createFunc)
+	pool.SetMaxSize(1)
+
+	wg := &sync.WaitGroup{}
+
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func() {
+			for j := 0; j < 100; j++ {
+				res, err := pool.Get(context.Background())
+				assert.NoError(t, err)
+				assert.Equal(t, 1, res)
+				pool.Return(res)
+			}
+			wg.Done()
+		}()
+	}
+
+	wg.Wait()
+
+	assert.Equal(t, 1, createCalls.Value())
+	assert.Equal(t, 1, pool.Size())
 }
 
 func TestPoolGet_ReturnsErrorFromFailedResourceCreate(t *testing.T) {
@@ -39,10 +90,9 @@ func TestPoolGet_ReturnsErrorFromFailedResourceCreate(t *testing.T) {
 }
 
 func TestPoolGet_ReusesResources(t *testing.T) {
-	createCalls := 0
+	var createCalls Counter
 	createFunc := func() (interface{}, error) {
-		createCalls += 1
-		return createCalls, nil
+		return createCalls.Next(), nil
 	}
 	pool := pool.New(createFunc)
 
@@ -58,7 +108,7 @@ func TestPoolGet_ReusesResources(t *testing.T) {
 
 	pool.Return(res)
 
-	assert.Equal(t, 1, createCalls)
+	assert.Equal(t, 1, createCalls.Value())
 }
 
 func TestPoolGet_ContextAlreadyCanceled(t *testing.T) {
@@ -77,13 +127,11 @@ func TestPoolGet_ContextAlreadyCanceled(t *testing.T) {
 func TestPoolGet_ContextCanceledDuringCreate(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
-	createCalls := 0
-
+	var createCalls Counter
 	createFunc := func() (interface{}, error) {
 		cancel()
 		time.Sleep(1 * time.Second)
-		createCalls += 1
-		return createCalls, nil
+		return createCalls.Next(), nil
 	}
 	pool := pool.New(createFunc)
 
@@ -92,13 +140,68 @@ func TestPoolGet_ContextCanceledDuringCreate(t *testing.T) {
 	assert.Nil(t, res)
 }
 
-func TestPoolReturnPanicsIfResourceNotPartOfPool(t *testing.T) {
-	createCalls := 0
+func TestPoolReturn_PanicsIfResourceNotPartOfPool(t *testing.T) {
+	var createCalls Counter
 	createFunc := func() (interface{}, error) {
-		createCalls += 1
-		return createCalls, nil
+		return createCalls.Next(), nil
 	}
 	pool := pool.New(createFunc)
 
 	assert.Panics(t, func() { pool.Return(42) })
+}
+
+func BenchmarkPoolGetAndReturnNoContention(b *testing.B) {
+	var createCalls Counter
+	createFunc := func() (interface{}, error) {
+		return createCalls.Next(), nil
+	}
+	pool := pool.New(createFunc)
+
+	for i := 0; i < b.N; i++ {
+		res, err := pool.Get(context.Background())
+		if err != nil {
+			b.Fatal(err)
+		}
+		pool.Return(res)
+	}
+}
+
+func BenchmarkPoolGetAndReturnHeavyContention(b *testing.B) {
+	poolSize := 8
+	contentionClients := 15
+
+	var createCalls Counter
+	createFunc := func() (interface{}, error) {
+		return createCalls.Next(), nil
+	}
+	pool := pool.New(createFunc)
+	pool.SetMaxSize(poolSize)
+
+	doneChan := make(chan struct{})
+	defer close(doneChan)
+	for i := 0; i < contentionClients; i++ {
+		go func() {
+			for {
+				select {
+				case <-doneChan:
+					return
+				default:
+				}
+
+				res, err := pool.Get(context.Background())
+				if err != nil {
+					b.Fatal(err)
+				}
+				pool.Return(res)
+			}
+		}()
+	}
+
+	for i := 0; i < b.N; i++ {
+		res, err := pool.Get(context.Background())
+		if err != nil {
+			b.Fatal(err)
+		}
+		pool.Return(res)
+	}
 }
