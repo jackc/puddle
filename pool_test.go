@@ -3,6 +3,7 @@ package puddle_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -489,52 +490,79 @@ func TestPoolReturnClosesResourcePoolIsAlreadyClosedErrorIsReported(t *testing.T
 	}
 }
 
-func BenchmarkPoolGetAndReturnNoContention(b *testing.B) {
-	createFunc, _ := createCreateResourceFunc()
-	pool := puddle.NewPool(createFunc, stubCloseRes)
+func BenchmarkPoolGetAndReturn(b *testing.B) {
+	benchmarks := []struct {
+		poolSize              int
+		concurrentClientCount int
+		loanDuration          time.Duration
+	}{
+		// Small pool
+		{10, 1, 0},
+		{10, 5, 0},
+		{10, 10, 0},
+		{10, 20, 0},
+		{10, 1, 1 * time.Millisecond},
+		{10, 5, 1 * time.Millisecond},
+		{10, 10, 1 * time.Millisecond},
+		{10, 20, 1 * time.Millisecond},
 
-	for i := 0; i < b.N; i++ {
-		res, err := pool.Get(context.Background())
-		if err != nil {
-			b.Fatal(err)
-		}
-		pool.Return(res)
+		// large pool
+		{100, 1, 0},
+		{100, 50, 0},
+		{100, 100, 0},
+		{100, 200, 0},
+		{100, 1, 1 * time.Millisecond},
+		{100, 50, 1 * time.Millisecond},
+		{100, 100, 1 * time.Millisecond},
+		{100, 200, 1 * time.Millisecond},
+
+		// huge pool
+		{1000, 1, 0},
+		{1000, 500, 0},
+		{1000, 1000, 0},
+		{1000, 2000, 0},
+		{1000, 1, 1 * time.Millisecond},
+		{1000, 500, 1 * time.Millisecond},
+		{1000, 1000, 1 * time.Millisecond},
+		{1000, 2000, 1 * time.Millisecond},
 	}
-}
 
-func BenchmarkPoolGetAndReturnHeavyContention(b *testing.B) {
-	poolSize := 8
-	contentionClients := 15
+	for _, bm := range benchmarks {
+		name := fmt.Sprintf("PoolSize=%d/ConcurrentClientCount=%d/LoanDuration=%v", bm.poolSize, bm.concurrentClientCount, bm.loanDuration)
 
-	createFunc, _ := createCreateResourceFunc()
-	pool := puddle.NewPool(createFunc, stubCloseRes)
-	pool.SetMaxSize(poolSize)
+		createFunc, _ := createCreateResourceFunc()
+		pool := puddle.NewPool(createFunc, stubCloseRes)
+		pool.SetMaxSize(bm.poolSize)
 
-	doneChan := make(chan struct{})
-	defer close(doneChan)
-	for i := 0; i < contentionClients; i++ {
-		go func() {
-			for {
-				select {
-				case <-doneChan:
-					return
-				default:
-				}
-
-				res, err := pool.Get(context.Background())
-				if err != nil {
-					b.Fatal(err)
-				}
-				pool.Return(res)
+		borrowAndReturn := func() {
+			res, err := pool.Get(context.Background())
+			if err != nil {
+				b.Fatal(err)
 			}
-		}()
-	}
-
-	for i := 0; i < b.N; i++ {
-		res, err := pool.Get(context.Background())
-		if err != nil {
-			b.Fatal(err)
+			time.Sleep(bm.loanDuration)
+			pool.Return(res)
 		}
-		pool.Return(res)
+
+		b.Run(name, func(b *testing.B) {
+			doneChan := make(chan struct{})
+			defer close(doneChan)
+			for i := 0; i < bm.concurrentClientCount-1; i++ {
+				go func() {
+					for {
+						select {
+						case <-doneChan:
+							return
+						default:
+						}
+
+						borrowAndReturn()
+					}
+				}()
+			}
+
+			for i := 0; i < b.N; i++ {
+				borrowAndReturn()
+			}
+		})
 	}
 }
