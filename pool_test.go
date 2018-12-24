@@ -34,13 +34,18 @@ func (c *Counter) Value() int {
 	return n
 }
 
+func createCreateResourceFunc() (puddle.CreateFunc, *Counter) {
+	var c Counter
+	f := func() (interface{}, error) {
+		return c.Next(), nil
+	}
+	return f, &c
+}
+
 func stubCloseRes(interface{}) error { return nil }
 
 func TestPoolGetCreatesResourceWhenNoneAvailable(t *testing.T) {
-	var createCalls Counter
-	createFunc := func() (interface{}, error) {
-		return createCalls.Next(), nil
-	}
+	createFunc, _ := createCreateResourceFunc()
 	pool := puddle.NewPool(createFunc, stubCloseRes)
 
 	res, err := pool.Get(context.Background())
@@ -51,20 +56,14 @@ func TestPoolGetCreatesResourceWhenNoneAvailable(t *testing.T) {
 }
 
 func TestPoolSetMinSizeImmediatelyCreatesNewResources(t *testing.T) {
-	var createCalls Counter
-	createFunc := func() (interface{}, error) {
-		return createCalls.Next(), nil
-	}
+	createFunc, _ := createCreateResourceFunc()
 	pool := puddle.NewPool(createFunc, stubCloseRes)
 	pool.SetMinSize(2)
 	assert.Equal(t, 2, pool.Size())
 }
 
 func TestPoolGetDoesNotCreatesResourceWhenItWouldExceedMaxSize(t *testing.T) {
-	var createCalls Counter
-	createFunc := func() (interface{}, error) {
-		return createCalls.Next(), nil
-	}
+	createFunc, createCounter := createCreateResourceFunc()
 	pool := puddle.NewPool(createFunc, stubCloseRes)
 	pool.SetMaxSize(1)
 
@@ -85,7 +84,7 @@ func TestPoolGetDoesNotCreatesResourceWhenItWouldExceedMaxSize(t *testing.T) {
 
 	wg.Wait()
 
-	assert.Equal(t, 1, createCalls.Value())
+	assert.Equal(t, 1, createCounter.Value())
 	assert.Equal(t, 1, pool.Size())
 }
 
@@ -102,10 +101,7 @@ func TestPoolGetReturnsErrorFromFailedResourceCreate(t *testing.T) {
 }
 
 func TestPoolGetReusesResources(t *testing.T) {
-	var createCalls Counter
-	createFunc := func() (interface{}, error) {
-		return createCalls.Next(), nil
-	}
+	createFunc, createCounter := createCreateResourceFunc()
 	pool := puddle.NewPool(createFunc, stubCloseRes)
 
 	res, err := pool.Get(context.Background())
@@ -120,7 +116,7 @@ func TestPoolGetReusesResources(t *testing.T) {
 
 	pool.Return(res)
 
-	assert.Equal(t, 1, createCalls.Value())
+	assert.Equal(t, 1, createCounter.Value())
 }
 
 func TestPoolGetContextAlreadyCanceled(t *testing.T) {
@@ -153,20 +149,14 @@ func TestPoolGetContextCanceledDuringCreate(t *testing.T) {
 }
 
 func TestPoolReturnPanicsIfResourceNotPartOfPool(t *testing.T) {
-	var createCalls Counter
-	createFunc := func() (interface{}, error) {
-		return createCalls.Next(), nil
-	}
+	createFunc, _ := createCreateResourceFunc()
 	pool := puddle.NewPool(createFunc, stubCloseRes)
 
 	assert.Panics(t, func() { pool.Return(42) })
 }
 
 func TestPoolReturnClosesAndRemovesResourceIfOlderThanMaxDuration(t *testing.T) {
-	var createCalls Counter
-	createFunc := func() (interface{}, error) {
-		return createCalls.Next(), nil
-	}
+	createFunc, _ := createCreateResourceFunc()
 	var closeCalls Counter
 	closeFunc := func(interface{}) error {
 		closeCalls.Next()
@@ -198,10 +188,7 @@ func TestPoolReturnClosesAndRemovesResourceIfMoreUsesThanMaxResourceUses(t *test
 		}
 	}
 
-	var createCalls Counter
-	createFunc := func() (interface{}, error) {
-		return createCalls.Next(), nil
-	}
+	createFunc, _ := createCreateResourceFunc()
 	var closeCalls Counter
 	closeFunc := func(interface{}) error {
 		n := closeCalls.Next()
@@ -224,10 +211,7 @@ func TestPoolReturnClosesAndRemovesResourceIfMoreUsesThanMaxResourceUses(t *test
 }
 
 func TestPoolCloseClosesAllAvailableResources(t *testing.T) {
-	var createCalls Counter
-	createFunc := func() (interface{}, error) {
-		return createCalls.Next(), nil
-	}
+	createFunc, _ := createCreateResourceFunc()
 
 	var closeCalls Counter
 	closeFunc := func(interface{}) error {
@@ -265,10 +249,7 @@ func TestPoolReturnClosesResourcePoolIsAlreadyClosed(t *testing.T) {
 		}
 	}
 
-	var createCalls Counter
-	createFunc := func() (interface{}, error) {
-		return createCalls.Next(), nil
-	}
+	createFunc, _ := createCreateResourceFunc()
 
 	var closeCalls Counter
 	closeFunc := func(interface{}) error {
@@ -302,20 +283,14 @@ func TestPoolReturnClosesResourcePoolIsAlreadyClosed(t *testing.T) {
 }
 
 func TestPoolRemovePanicsIfResourceNotPartOfPool(t *testing.T) {
-	var createCalls Counter
-	createFunc := func() (interface{}, error) {
-		return createCalls.Next(), nil
-	}
+	createFunc, _ := createCreateResourceFunc()
 	pool := puddle.NewPool(createFunc, stubCloseRes)
 
 	assert.Panics(t, func() { pool.Remove(42) })
 }
 
 func TestPoolRemoveRemovesResourceFromPool(t *testing.T) {
-	var createCalls Counter
-	createFunc := func() (interface{}, error) {
-		return createCalls.Next(), nil
-	}
+	createFunc, _ := createCreateResourceFunc()
 	pool := puddle.NewPool(createFunc, stubCloseRes)
 
 	res, err := pool.Get(context.Background())
@@ -457,10 +432,7 @@ func TestPoolRemoveRemovesResourceFromPoolAndDoesNotStartNewCreationToMaintainMi
 }
 
 func TestPoolGetReturnsErrorWhenPoolIsClosed(t *testing.T) {
-	var createCalls Counter
-	createFunc := func() (interface{}, error) {
-		return createCalls.Next(), nil
-	}
+	createFunc, _ := createCreateResourceFunc()
 	pool := puddle.NewPool(createFunc, stubCloseRes)
 	pool.Close()
 
@@ -511,10 +483,7 @@ func TestPoolGetLateFailedCreateErrorIsReported(t *testing.T) {
 }
 
 func TestPoolCloseResourceCloseErrorIsReported(t *testing.T) {
-	var createCalls Counter
-	createFunc := func() (interface{}, error) {
-		return createCalls.Next(), nil
-	}
+	createFunc, _ := createCreateResourceFunc()
 	errCloseFailed := errors.New("close failed")
 	closeFunc := func(res interface{}) error { return errCloseFailed }
 	pool := puddle.NewPool(createFunc, closeFunc)
@@ -538,10 +507,7 @@ func TestPoolCloseResourceCloseErrorIsReported(t *testing.T) {
 }
 
 func TestPoolReturnClosesResourcePoolIsAlreadyClosedErrorIsReported(t *testing.T) {
-	var createCalls Counter
-	createFunc := func() (interface{}, error) {
-		return createCalls.Next(), nil
-	}
+	createFunc, _ := createCreateResourceFunc()
 
 	errCloseFailed := errors.New("close failed")
 	closeFunc := func(res interface{}) error { return errCloseFailed }
@@ -586,10 +552,7 @@ func BenchmarkPoolGetAndReturnHeavyContention(b *testing.B) {
 	poolSize := 8
 	contentionClients := 15
 
-	var createCalls Counter
-	createFunc := func() (interface{}, error) {
-		return createCalls.Next(), nil
-	}
+	createFunc, _ := createCreateResourceFunc()
 	pool := puddle.NewPool(createFunc, stubCloseRes)
 	pool.SetMaxSize(poolSize)
 
