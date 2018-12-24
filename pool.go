@@ -12,6 +12,7 @@ const (
 	resourceStatusCreating  = 0
 	resourceStatusAvailable = iota
 	resourceStatusBorrowed  = iota
+	resourceStatusClosing   = iota
 )
 
 const maxUint = ^uint(0)
@@ -29,28 +30,10 @@ type CloseFunc func(res interface{}) (err error)
 type BackgroundErrorHandler func(err error)
 
 type resourceWrapper struct {
-	pool *Pool
-
 	resource      interface{}
 	creationTime  time.Time
 	checkoutCount uint64
 	status        byte
-}
-
-func (rw *resourceWrapper) run() {
-	select {
-
-	case <-pool.finishClosePoolChan:
-		break
-	}
-
-	for {
-		select {
-
-		case <-pool.finishClosePoolChan:
-			break
-		}
-	}
 }
 
 // Pool is a thread-safe resource pool.
@@ -58,9 +41,10 @@ type Pool struct {
 	startclosePoolChan  chan struct{}
 	finishClosePoolChan chan struct{}
 
-	borrowResourceChan chan interface{}
-	returnResourceChan chan interface{}
-	cond               *sync.Cond
+	blockedBorrowResourceChan chan struct{}
+	borrowResourceChan        chan interface{}
+	returnResourceChan        chan interface{}
+	cond                      *sync.Cond
 
 	allResources         map[interface{}]*resourceWrapper
 	availableResources   []*resourceWrapper
@@ -76,18 +60,20 @@ type Pool struct {
 
 func NewPool(createRes CreateFunc, closeRes CloseFunc) *Pool {
 	pool := &Pool{
-		startclosePoolChan:     make(chan struct{}),
-		finishClosePoolChan:    make(chan struct{}),
-		borrowResourceChan:     make(chan interface{}),
-		returnResourceChan:     make(chan interface{}),
-		cond:                   sync.NewCond(new(sync.Mutex)),
-		allResources:           make(map[interface{}]*resourceWrapper),
-		maxSize:                maxInt,
-		maxResourceDuration:    math.MaxInt64,
-		maxResourceCheckouts:   math.MaxUint64,
-		createRes:              createRes,
-		closeRes:               closeRes,
-		backgroundErrorHandler: func(error) {},
+		startclosePoolChan:        make(chan struct{}),
+		finishClosePoolChan:       make(chan struct{}),
+		blockedBorrowResourceChan: make(chan struct{}),
+		borrowResourceChan:        make(chan interface{}),
+		newResourceChan:           make(chan interface{}),
+		returnResourceChan:        make(chan interface{}),
+		cond:                      sync.NewCond(new(sync.Mutex)),
+		allResources:              make(map[interface{}]*resourceWrapper),
+		maxSize:                   maxInt,
+		maxResourceDuration:       math.MaxInt64,
+		maxResourceCheckouts:      math.MaxUint64,
+		createRes:                 createRes,
+		closeRes:                  closeRes,
+		backgroundErrorHandler:    func(error) {},
 	}
 
 	go pool.run()
@@ -95,8 +81,61 @@ func NewPool(createRes CreateFunc, closeRes CloseFunc) *Pool {
 }
 
 func (p *Pool) run() {
+	var borrowChan chan interface{}
+	var availRW *resourceWrapper
+
 	for {
 		select {
+		// Successful borrow of available resource
+		case borrowChan <- availRW.resource:
+			borrowChan = nil
+			availRW = nil
+			for _, rw := range p.allResources {
+				if rw.status == resourceStatusAvailable {
+					borrowChan = p.borrowResourceChan
+					availRW = rw
+					break
+				}
+			}
+
+			// Client is blocked waiting for resource
+		case <-p.blockedBorrowResourceChan:
+			if len(p.allResources) < p.maxSize {
+				p.startCreate()
+			}
+
+			// New resource has been created successfully
+		case res := <-p.newResourceChan:
+			borrowChan = p.borrowResourceChan
+			p.allResources[res] =
+			availRW = nil
+
+			// Resource returned from client
+		case res <- p.returnResourceChan:
+			rw, present := p.allResources[res]
+			if !present {
+				panic("resource returned that does not belong to pool")
+			}
+			shouldClose := true
+
+			now := time.Now()
+			if now.Sub(rw.creationTime) > p.maxResourceDuration {
+			} else if p.maxResourceCheckouts <= rw.checkoutCount { // use <= instead of == as maxResourceCheckouts may be lowered while pool is in use
+			} else {
+				shouldClose = false
+			}
+
+			if shouldClose {
+				delete(p.allResources, rw.resource)
+				p.ensureMinResources()
+				p.cond.L.Unlock()
+				p.backgroundClose(rw.resource)
+				return
+			}
+
+			rw.status = resourceStatusAvailable
+			p.availableResources = append(p.availableResources, rw)
+
 		case <-p.startclosePoolChan:
 			break
 		case <-p.returnResourceChan:
@@ -379,13 +418,14 @@ func (p *Pool) backgroundClose(res interface{}) {
 // Return returns res to the the pool. If res is not part of the pool Return
 // will panic.
 func (p *Pool) Return(res interface{}) {
+	p.returnResourceChan <- res
 	p.cond.L.Lock()
 
-	rw, present := p.allResources[res]
-	if !present {
-		p.cond.L.Unlock()
-		panic("Return called on resource that does not belong to pool")
-	}
+	// rw, present := p.allResources[res]
+	// if !present {
+	// 	p.cond.L.Unlock()
+	// 	panic("Return called on resource that does not belong to pool")
+	// }
 
 	// if p.closed {
 	// 	delete(p.allResources, rw.resource)
