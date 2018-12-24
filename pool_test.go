@@ -186,6 +186,43 @@ func TestPoolReturnClosesAndRemovesResourceIfOlderThanMaxDuration(t *testing.T) 
 	assert.Equal(t, 0, pool.Size())
 }
 
+func TestPoolReturnClosesAndRemovesResourceIfMoreUsesThanMaxResourceUses(t *testing.T) {
+	closeCallsChan := make(chan int, 4)
+
+	waitForRead := func(ch chan int) bool {
+		select {
+		case <-ch:
+			return true
+		case <-time.NewTimer(time.Second).C:
+			return false
+		}
+	}
+
+	var createCalls Counter
+	createFunc := func() (interface{}, error) {
+		return createCalls.Next(), nil
+	}
+	var closeCalls Counter
+	closeFunc := func(interface{}) error {
+		n := closeCalls.Next()
+		closeCallsChan <- n
+		return nil
+	}
+
+	pool := puddle.NewPool(createFunc, closeFunc)
+	pool.SetMaxResourceUses(1)
+
+	res, err := pool.Get(context.Background())
+	require.NoError(t, err)
+
+	pool.Return(res)
+
+	waitForRead(closeCallsChan)
+
+	assert.Equal(t, 1, closeCalls.Value())
+	assert.Equal(t, 0, pool.Size())
+}
+
 func TestPoolCloseClosesAllAvailableResources(t *testing.T) {
 	var createCalls Counter
 	createFunc := func() (interface{}, error) {

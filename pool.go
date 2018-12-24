@@ -29,9 +29,10 @@ type CloseFunc func(res interface{}) (err error)
 type BackgroundErrorHandler func(err error)
 
 type resourceWrapper struct {
-	resource     interface{}
-	creationTime time.Time
-	status       byte
+	resource      interface{}
+	creationTime  time.Time
+	checkoutCount uint64
+	status        byte
 }
 
 // Pool is a thread-safe resource pool.
@@ -43,6 +44,7 @@ type Pool struct {
 	minSize             int
 	maxSize             int
 	maxResourceDuration time.Duration
+	maxResourceUses     uint64
 	closed              bool
 
 	createRes              CreateFunc
@@ -56,6 +58,7 @@ func NewPool(createRes CreateFunc, closeRes CloseFunc) *Pool {
 		allResources:           make(map[interface{}]*resourceWrapper),
 		maxSize:                maxInt,
 		maxResourceDuration:    math.MaxInt64,
+		maxResourceUses:        math.MaxUint64,
 		createRes:              createRes,
 		closeRes:               closeRes,
 		backgroundErrorHandler: func(error) {},
@@ -144,6 +147,24 @@ func (p *Pool) SetMaxResourceDuration(d time.Duration) {
 	}
 	p.cond.L.Lock()
 	p.maxResourceDuration = d
+	p.cond.L.Unlock()
+}
+
+// MaxResourceUses returns the current maximum uses per resource of the pool.
+func (p *Pool) MaxResourceUses() uint64 {
+	p.cond.L.Lock()
+	n := p.maxResourceUses
+	p.cond.L.Unlock()
+	return n
+}
+
+// SetMaxResourceUses sets the maximum maximum resource duration of the pool. It panics if n < 1.
+func (p *Pool) SetMaxResourceUses(n uint64) {
+	if n < 0 {
+		panic("pool MaxResourceUses cannot be < 1")
+	}
+	p.cond.L.Lock()
+	p.maxResourceUses = n
 	p.cond.L.Unlock()
 }
 
@@ -252,6 +273,7 @@ func (p *Pool) lockedAvailableGet() interface{} {
 		panic("BUG: unavailable resource gotten from availableResources")
 	}
 	rw.status = resourceStatusBorrowed
+	rw.checkoutCount += 1
 	return rw.resource
 }
 
@@ -277,7 +299,7 @@ func (p *Pool) startCreate() (resChan chan interface{}, errChan chan error) {
 			return
 		}
 
-		rw := &resourceWrapper{resource: res, creationTime: startTime, status: resourceStatusBorrowed}
+		rw := &resourceWrapper{resource: res, creationTime: startTime, status: resourceStatusBorrowed, checkoutCount: 1}
 		p.allResources[res] = rw
 		p.cond.L.Unlock()
 		resChan <- res
@@ -326,8 +348,16 @@ func (p *Pool) Return(res interface{}) {
 		return
 	}
 
+	closeResource := true
+
 	now := time.Now()
 	if now.Sub(rw.creationTime) > p.maxResourceDuration {
+	} else if p.maxResourceUses <= rw.checkoutCount { // use <= instead of == as maxResourceUses may be lowered while pool is in use
+	} else {
+		closeResource = false
+	}
+
+	if closeResource {
 		delete(p.allResources, rw.resource)
 		p.ensureMinResources()
 		p.cond.L.Unlock()
