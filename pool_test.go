@@ -42,6 +42,20 @@ func createCreateResourceFunc() (puddle.CreateFunc, *Counter) {
 	return f, &c
 }
 
+func createCreateResourceFuncWithNotifierChan() (puddle.CreateFunc, *Counter, chan int) {
+	ch := make(chan int)
+	var c Counter
+	f := func() (interface{}, error) {
+		n := c.Next()
+
+		// Because the tests will not read from ch until after the create function f returns.
+		go func() { ch <- n }()
+
+		return n, nil
+	}
+	return f, &c, ch
+}
+
 func stubCloseRes(interface{}) error { return nil }
 
 func waitForRead(ch chan int) bool {
@@ -294,16 +308,9 @@ func TestPoolRemoveRemovesResourceFromPool(t *testing.T) {
 }
 
 func TestPoolRemoveRemovesResourceFromPoolAndStartsNewCreationToMaintainMinSize(t *testing.T) {
-	createCallsChan := make(chan int, 4)
+	createFunc, createCounter, createCallsChan := createCreateResourceFuncWithNotifierChan()
+
 	closeCallsChan := make(chan int, 4)
-
-	var createCalls Counter
-	createFunc := func() (interface{}, error) {
-		n := createCalls.Next()
-		createCallsChan <- n
-		return n, nil
-	}
-
 	var closeCalls Counter
 	closeFunc := func(interface{}) error {
 		n := closeCalls.Next()
@@ -344,20 +351,13 @@ func TestPoolRemoveRemovesResourceFromPoolAndStartsNewCreationToMaintainMinSize(
 	require.True(t, waitForRead(closeCallsChan))
 
 	assert.Equal(t, 2, pool.Size())
-	assert.Equal(t, 4, createCalls.Value())
+	assert.Equal(t, 4, createCounter.Value())
 	assert.Equal(t, 2, closeCalls.Value())
 }
 
 func TestPoolRemoveRemovesResourceFromPoolAndDoesNotStartNewCreationToMaintainMinSizeWhenPoolIsClosed(t *testing.T) {
-	createCallsChan := make(chan int, 4)
+	createFunc, createCounter, createCallsChan := createCreateResourceFuncWithNotifierChan()
 	closeCallsChan := make(chan int, 4)
-
-	var createCalls Counter
-	createFunc := func() (interface{}, error) {
-		n := createCalls.Next()
-		createCallsChan <- n
-		return n, nil
-	}
 
 	var closeCalls Counter
 	closeFunc := func(interface{}) error {
@@ -400,7 +400,7 @@ func TestPoolRemoveRemovesResourceFromPoolAndDoesNotStartNewCreationToMaintainMi
 	require.True(t, waitForRead(closeCallsChan))
 
 	assert.Equal(t, 0, pool.Size())
-	assert.Equal(t, 2, createCalls.Value())
+	assert.Equal(t, 2, createCounter.Value())
 	assert.Equal(t, 2, closeCalls.Value())
 }
 
