@@ -162,6 +162,30 @@ func TestPoolReturnPanicsIfResourceNotPartOfPool(t *testing.T) {
 	assert.Panics(t, func() { pool.Return(42) })
 }
 
+func TestPoolReturnClosesAndRemovesResourceIfOlderThanMaxDuration(t *testing.T) {
+	var createCalls Counter
+	createFunc := func() (interface{}, error) {
+		return createCalls.Next(), nil
+	}
+	var closeCalls Counter
+	closeFunc := func(interface{}) error {
+		closeCalls.Next()
+		return nil
+	}
+
+	pool := puddle.NewPool(createFunc, closeFunc)
+
+	res, err := pool.Get(context.Background())
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, pool.Size())
+	pool.SetMaxResourceDuration(time.Nanosecond)
+	time.Sleep(time.Nanosecond)
+
+	pool.Return(res)
+	assert.Equal(t, 0, pool.Size())
+}
+
 func TestPoolCloseClosesAllAvailableResources(t *testing.T) {
 	var createCalls Counter
 	createFunc := func() (interface{}, error) {
@@ -193,6 +217,17 @@ func TestPoolCloseClosesAllAvailableResources(t *testing.T) {
 }
 
 func TestPoolReturnClosesResourcePoolIsAlreadyClosed(t *testing.T) {
+	closeCallsChan := make(chan int, 4)
+
+	waitForRead := func(ch chan int) bool {
+		select {
+		case <-ch:
+			return true
+		case <-time.NewTimer(time.Second).C:
+			return false
+		}
+	}
+
 	var createCalls Counter
 	createFunc := func() (interface{}, error) {
 		return createCalls.Next(), nil
@@ -200,7 +235,8 @@ func TestPoolReturnClosesResourcePoolIsAlreadyClosed(t *testing.T) {
 
 	var closeCalls Counter
 	closeFunc := func(interface{}) error {
-		closeCalls.Next()
+		n := closeCalls.Next()
+		closeCallsChan <- n
 		return nil
 	}
 
@@ -219,6 +255,11 @@ func TestPoolReturnClosesResourcePoolIsAlreadyClosed(t *testing.T) {
 	for _, res := range resources {
 		p.Return(res)
 	}
+
+	waitForRead(closeCallsChan)
+	waitForRead(closeCallsChan)
+	waitForRead(closeCallsChan)
+	waitForRead(closeCallsChan)
 
 	assert.Equal(t, len(resources), closeCalls.Value())
 }
@@ -483,8 +524,8 @@ func TestPoolReturnClosesResourcePoolIsAlreadyClosedErrorIsReported(t *testing.T
 	select {
 	case err = <-asyncErrChan:
 		assert.Equal(t, errCloseFailed, err)
-	default:
-		t.Fatal("error not reported")
+	case <-time.NewTimer(time.Second).C:
+		t.Fatal("timed out waiting for async error")
 	}
 }
 
