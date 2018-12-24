@@ -44,6 +44,15 @@ func createCreateResourceFunc() (puddle.CreateFunc, *Counter) {
 
 func stubCloseRes(interface{}) error { return nil }
 
+func waitForRead(ch chan int) bool {
+	select {
+	case <-ch:
+		return true
+	case <-time.NewTimer(time.Second).C:
+		return false
+	}
+}
+
 func TestPoolGetCreatesResourceWhenNoneAvailable(t *testing.T) {
 	createFunc, _ := createCreateResourceFunc()
 	pool := puddle.NewPool(createFunc, stubCloseRes)
@@ -179,15 +188,6 @@ func TestPoolReturnClosesAndRemovesResourceIfOlderThanMaxDuration(t *testing.T) 
 func TestPoolReturnClosesAndRemovesResourceIfMoreUsesThanMaxResourceUses(t *testing.T) {
 	closeCallsChan := make(chan int, 4)
 
-	waitForRead := func(ch chan int) bool {
-		select {
-		case <-ch:
-			return true
-		case <-time.NewTimer(time.Second).C:
-			return false
-		}
-	}
-
 	createFunc, _ := createCreateResourceFunc()
 	var closeCalls Counter
 	closeFunc := func(interface{}) error {
@@ -239,15 +239,6 @@ func TestPoolCloseClosesAllAvailableResources(t *testing.T) {
 
 func TestPoolReturnClosesResourcePoolIsAlreadyClosed(t *testing.T) {
 	closeCallsChan := make(chan int, 4)
-
-	waitForRead := func(ch chan int) bool {
-		select {
-		case <-ch:
-			return true
-		case <-time.NewTimer(time.Second).C:
-			return false
-		}
-	}
 
 	createFunc, _ := createCreateResourceFunc()
 
@@ -306,15 +297,6 @@ func TestPoolRemoveRemovesResourceFromPoolAndStartsNewCreationToMaintainMinSize(
 	createCallsChan := make(chan int, 4)
 	closeCallsChan := make(chan int, 4)
 
-	waitForRead := func(ch chan int) bool {
-		select {
-		case <-ch:
-			return true
-		case <-time.NewTimer(time.Second).C:
-			return false
-		}
-	}
-
 	var createCalls Counter
 	createFunc := func() (interface{}, error) {
 		n := createCalls.Next()
@@ -369,15 +351,6 @@ func TestPoolRemoveRemovesResourceFromPoolAndStartsNewCreationToMaintainMinSize(
 func TestPoolRemoveRemovesResourceFromPoolAndDoesNotStartNewCreationToMaintainMinSizeWhenPoolIsClosed(t *testing.T) {
 	createCallsChan := make(chan int, 4)
 	closeCallsChan := make(chan int, 4)
-
-	waitForRead := func(ch chan int) bool {
-		select {
-		case <-ch:
-			return true
-		case <-time.NewTimer(time.Second).C:
-			return false
-		}
-	}
 
 	var createCalls Counter
 	createFunc := func() (interface{}, error) {
