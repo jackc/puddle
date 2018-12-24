@@ -491,10 +491,7 @@ func TestPoolReturnClosesResourcePoolIsAlreadyClosedErrorIsReported(t *testing.T
 }
 
 func BenchmarkPoolGetAndReturnNoContention(b *testing.B) {
-	var createCalls Counter
-	createFunc := func() (interface{}, error) {
-		return createCalls.Next(), nil
-	}
+	createFunc, _ := createCreateResourceFunc()
 	pool := puddle.NewPool(createFunc, stubCloseRes)
 
 	for i := 0; i < b.N; i++ {
