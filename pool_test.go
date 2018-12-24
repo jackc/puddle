@@ -212,12 +212,12 @@ func TestPoolReturnClosesAndRemovesResourceIfOlderThanMaxDuration(t *testing.T) 
 	assert.Equal(t, 1, closeCalls.Value())
 }
 
-func TestPoolReturnClosesAndRemovesResourceIfMoreUsesThanMaxResourceUses(t *testing.T) {
+func TestPoolReturnClosesAndRemovesResourceWhenResourceCheckoutCountIsMaxResourceCheckouts(t *testing.T) {
 	createFunc, _ := createCreateResourceFunc()
 	closeFunc, closeCalls, closeCallsChan := createCloseResourceFuncWithNotifierChan()
 
 	pool := puddle.NewPool(createFunc, closeFunc)
-	pool.SetMaxResourceUses(1)
+	pool.SetMaxResourceCheckouts(1)
 
 	res, err := pool.Get(context.Background())
 	require.NoError(t, err)

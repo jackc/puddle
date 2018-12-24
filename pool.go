@@ -39,13 +39,13 @@ type resourceWrapper struct {
 type Pool struct {
 	cond *sync.Cond
 
-	allResources        map[interface{}]*resourceWrapper
-	availableResources  []*resourceWrapper
-	minSize             int
-	maxSize             int
-	maxResourceDuration time.Duration
-	maxResourceUses     uint64
-	closed              bool
+	allResources         map[interface{}]*resourceWrapper
+	availableResources   []*resourceWrapper
+	minSize              int
+	maxSize              int
+	maxResourceDuration  time.Duration
+	maxResourceCheckouts uint64
+	closed               bool
 
 	createRes              CreateFunc
 	closeRes               CloseFunc
@@ -58,7 +58,7 @@ func NewPool(createRes CreateFunc, closeRes CloseFunc) *Pool {
 		allResources:           make(map[interface{}]*resourceWrapper),
 		maxSize:                maxInt,
 		maxResourceDuration:    math.MaxInt64,
-		maxResourceUses:        math.MaxUint64,
+		maxResourceCheckouts:   math.MaxUint64,
 		createRes:              createRes,
 		closeRes:               closeRes,
 		backgroundErrorHandler: func(error) {},
@@ -150,21 +150,21 @@ func (p *Pool) SetMaxResourceDuration(d time.Duration) {
 	p.cond.L.Unlock()
 }
 
-// MaxResourceUses returns the current maximum uses per resource of the pool.
-func (p *Pool) MaxResourceUses() uint64 {
+// MaxResourceCheckouts returns the current maximum uses per resource of the pool.
+func (p *Pool) MaxResourceCheckouts() uint64 {
 	p.cond.L.Lock()
-	n := p.maxResourceUses
+	n := p.maxResourceCheckouts
 	p.cond.L.Unlock()
 	return n
 }
 
-// SetMaxResourceUses sets the maximum maximum resource duration of the pool. It panics if n < 1.
-func (p *Pool) SetMaxResourceUses(n uint64) {
+// SetMaxResourceCheckouts sets the maximum maximum resource duration of the pool. It panics if n < 1.
+func (p *Pool) SetMaxResourceCheckouts(n uint64) {
 	if n < 0 {
-		panic("pool MaxResourceUses cannot be < 1")
+		panic("pool MaxResourceCheckouts cannot be < 1")
 	}
 	p.cond.L.Lock()
-	p.maxResourceUses = n
+	p.maxResourceCheckouts = n
 	p.cond.L.Unlock()
 }
 
@@ -352,7 +352,7 @@ func (p *Pool) Return(res interface{}) {
 
 	now := time.Now()
 	if now.Sub(rw.creationTime) > p.maxResourceDuration {
-	} else if p.maxResourceUses <= rw.checkoutCount { // use <= instead of == as maxResourceUses may be lowered while pool is in use
+	} else if p.maxResourceCheckouts <= rw.checkoutCount { // use <= instead of == as maxResourceCheckouts may be lowered while pool is in use
 	} else {
 		closeResource = false
 	}
