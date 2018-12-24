@@ -29,15 +29,38 @@ type CloseFunc func(res interface{}) (err error)
 type BackgroundErrorHandler func(err error)
 
 type resourceWrapper struct {
+	pool *Pool
+
 	resource      interface{}
 	creationTime  time.Time
 	checkoutCount uint64
 	status        byte
 }
 
+func (rw *resourceWrapper) run() {
+	select {
+
+	case <-pool.finishClosePoolChan:
+		break
+	}
+
+	for {
+		select {
+
+		case <-pool.finishClosePoolChan:
+			break
+		}
+	}
+}
+
 // Pool is a thread-safe resource pool.
 type Pool struct {
-	cond *sync.Cond
+	startclosePoolChan  chan struct{}
+	finishClosePoolChan chan struct{}
+
+	borrowResourceChan chan interface{}
+	returnResourceChan chan interface{}
+	cond               *sync.Cond
 
 	allResources         map[interface{}]*resourceWrapper
 	availableResources   []*resourceWrapper
@@ -45,7 +68,6 @@ type Pool struct {
 	maxSize              int
 	maxResourceDuration  time.Duration
 	maxResourceCheckouts uint64
-	closed               bool
 
 	createRes              CreateFunc
 	closeRes               CloseFunc
@@ -53,7 +75,11 @@ type Pool struct {
 }
 
 func NewPool(createRes CreateFunc, closeRes CloseFunc) *Pool {
-	return &Pool{
+	pool := &Pool{
+		startclosePoolChan:     make(chan struct{}),
+		finishClosePoolChan:    make(chan struct{}),
+		borrowResourceChan:     make(chan interface{}),
+		returnResourceChan:     make(chan interface{}),
 		cond:                   sync.NewCond(new(sync.Mutex)),
 		allResources:           make(map[interface{}]*resourceWrapper),
 		maxSize:                maxInt,
@@ -63,26 +89,47 @@ func NewPool(createRes CreateFunc, closeRes CloseFunc) *Pool {
 		closeRes:               closeRes,
 		backgroundErrorHandler: func(error) {},
 	}
+
+	go pool.run()
+	return pool
 }
 
-// Close closes all resources in the pool and rejects future Get calls.
-// Unavailable resources will be closes when they are returned to the pool.
-func (p *Pool) Close() {
-	p.cond.L.Lock()
-	p.closed = true
-
-	for _, rw := range p.availableResources {
-		err := p.closeRes(rw.resource)
-		if err != nil {
-			p.backgroundErrorHandler(err)
+func (p *Pool) run() {
+	for {
+		select {
+		case <-p.startclosePoolChan:
+			break
+		case <-p.returnResourceChan:
 		}
-		delete(p.allResources, rw.resource)
-	}
-	p.availableResources = nil
-	p.cond.L.Unlock()
 
-	// Wake up all go routines waiting for a resource to be returned so they can terminate.
-	p.cond.Broadcast()
+	}
+
+	// TODO -- actually close the resources
+
+	close(p.finishClosePoolChan)
+}
+
+// Close closes all resources in the pool. It blocks until any borrowed
+// resources are returned and closed.
+func (p *Pool) Close() {
+	close(p.startclosePoolChan)
+	<-p.finishClosePoolChan
+
+	// p.cond.L.Lock()
+	// p.closed = true
+
+	// for _, rw := range p.availableResources {
+	// 	err := p.closeRes(rw.resource)
+	// 	if err != nil {
+	// 		p.backgroundErrorHandler(err)
+	// 	}
+	// 	delete(p.allResources, rw.resource)
+	// }
+	// p.availableResources = nil
+	// p.cond.L.Unlock()
+
+	// // Wake up all go routines waiting for a resource to be returned so they can terminate.
+	// p.cond.Broadcast()
 }
 
 // Size returns the current size of the pool.
@@ -184,20 +231,15 @@ func (p *Pool) SetBackgroundErrorHandler(f BackgroundErrorHandler) {
 // maximum capacity it will block until a resource is available. ctx can be used
 // to cancel the Get.
 func (p *Pool) Get(ctx context.Context) (interface{}, error) {
-	if doneChan := ctx.Done(); doneChan != nil {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		default:
-		}
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-p.startclosePoolChan:
+		return nil, ErrClosedPool
+	default:
 	}
 
 	p.cond.L.Lock()
-
-	if p.closed {
-		p.cond.L.Unlock()
-		return nil, ErrClosedPool
-	}
 
 	// If a resource is available now
 	if len(p.availableResources) > 0 {
@@ -222,10 +264,14 @@ func (p *Pool) Get(ctx context.Context) (interface{}, error) {
 		for len(p.availableResources) == 0 {
 			p.cond.Wait()
 		}
-		if p.closed {
+
+		select {
+		case <-p.startclosePoolChan:
 			p.cond.L.Unlock()
 			return
+		default:
 		}
+
 		res := p.lockedAvailableGet()
 		p.cond.L.Unlock()
 
@@ -341,12 +387,12 @@ func (p *Pool) Return(res interface{}) {
 		panic("Return called on resource that does not belong to pool")
 	}
 
-	if p.closed {
-		delete(p.allResources, rw.resource)
-		p.cond.L.Unlock()
-		p.backgroundClose(rw.resource)
-		return
-	}
+	// if p.closed {
+	// 	delete(p.allResources, rw.resource)
+	// 	p.cond.L.Unlock()
+	// 	p.backgroundClose(rw.resource)
+	// 	return
+	// }
 
 	closeResource := true
 
@@ -401,7 +447,9 @@ func (p *Pool) Remove(res interface{}) {
 // ensureMinResources creates new resources if necessary to get pool up to min size.
 // If pool is closed does nothing. p.cond.L must already be locked.
 func (p *Pool) ensureMinResources() {
-	if !p.closed {
+	select {
+	case <-p.startclosePoolChan:
+	default:
 		for len(p.allResources) < p.minSize {
 			createResChan, createErrChan := p.startCreate()
 			p.backgroundFinishCreate(createResChan, createErrChan)
