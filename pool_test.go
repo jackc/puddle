@@ -56,6 +56,20 @@ func createCreateResourceFuncWithNotifierChan() (puddle.CreateFunc, *Counter, ch
 	return f, &c, ch
 }
 
+func createCloseResourceFuncWithNotifierChan() (puddle.CloseFunc, *Counter, chan int) {
+	ch := make(chan int)
+	var c Counter
+	f := func(interface{}) error {
+		n := c.Next()
+
+		// Because the tests will not read from ch until after the close function f returns.
+		go func() { ch <- n }()
+
+		return nil
+	}
+	return f, &c, ch
+}
+
 func stubCloseRes(interface{}) error { return nil }
 
 func waitForRead(ch chan int) bool {
@@ -200,15 +214,8 @@ func TestPoolReturnClosesAndRemovesResourceIfOlderThanMaxDuration(t *testing.T) 
 }
 
 func TestPoolReturnClosesAndRemovesResourceIfMoreUsesThanMaxResourceUses(t *testing.T) {
-	closeCallsChan := make(chan int, 4)
-
 	createFunc, _ := createCreateResourceFunc()
-	var closeCalls Counter
-	closeFunc := func(interface{}) error {
-		n := closeCalls.Next()
-		closeCallsChan <- n
-		return nil
-	}
+	closeFunc, closeCalls, closeCallsChan := createCloseResourceFuncWithNotifierChan()
 
 	pool := puddle.NewPool(createFunc, closeFunc)
 	pool.SetMaxResourceUses(1)
@@ -252,16 +259,8 @@ func TestPoolCloseClosesAllAvailableResources(t *testing.T) {
 }
 
 func TestPoolReturnClosesResourcePoolIsAlreadyClosed(t *testing.T) {
-	closeCallsChan := make(chan int, 4)
-
 	createFunc, _ := createCreateResourceFunc()
-
-	var closeCalls Counter
-	closeFunc := func(interface{}) error {
-		n := closeCalls.Next()
-		closeCallsChan <- n
-		return nil
-	}
+	closeFunc, closeCalls, closeCallsChan := createCloseResourceFuncWithNotifierChan()
 
 	p := puddle.NewPool(createFunc, closeFunc)
 
@@ -309,14 +308,7 @@ func TestPoolRemoveRemovesResourceFromPool(t *testing.T) {
 
 func TestPoolRemoveRemovesResourceFromPoolAndStartsNewCreationToMaintainMinSize(t *testing.T) {
 	createFunc, createCounter, createCallsChan := createCreateResourceFuncWithNotifierChan()
-
-	closeCallsChan := make(chan int, 4)
-	var closeCalls Counter
-	closeFunc := func(interface{}) error {
-		n := closeCalls.Next()
-		closeCallsChan <- n
-		return nil
-	}
+	closeFunc, closeCalls, closeCallsChan := createCloseResourceFuncWithNotifierChan()
 
 	pool := puddle.NewPool(createFunc, closeFunc)
 
@@ -357,14 +349,7 @@ func TestPoolRemoveRemovesResourceFromPoolAndStartsNewCreationToMaintainMinSize(
 
 func TestPoolRemoveRemovesResourceFromPoolAndDoesNotStartNewCreationToMaintainMinSizeWhenPoolIsClosed(t *testing.T) {
 	createFunc, createCounter, createCallsChan := createCreateResourceFuncWithNotifierChan()
-	closeCallsChan := make(chan int, 4)
-
-	var closeCalls Counter
-	closeFunc := func(interface{}) error {
-		n := closeCalls.Next()
-		closeCallsChan <- n
-		return nil
-	}
+	closeFunc, closeCalls, closeCallsChan := createCloseResourceFuncWithNotifierChan()
 
 	pool := puddle.NewPool(createFunc, closeFunc)
 
