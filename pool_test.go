@@ -37,7 +37,7 @@ func (c *Counter) Value() int {
 
 func createCreateResourceFunc() (puddle.CreateFunc, *Counter) {
 	var c Counter
-	f := func() (interface{}, error) {
+	f := func(ctx context.Context) (interface{}, error) {
 		return c.Next(), nil
 	}
 	return f, &c
@@ -46,7 +46,7 @@ func createCreateResourceFunc() (puddle.CreateFunc, *Counter) {
 func createCreateResourceFuncWithNotifierChan() (puddle.CreateFunc, *Counter, chan int) {
 	ch := make(chan int)
 	var c Counter
-	f := func() (interface{}, error) {
+	f := func(ctx context.Context) (interface{}, error) {
 		n := c.Next()
 
 		// Because the tests will not read from ch until after the create function f returns.
@@ -93,13 +93,6 @@ func TestPoolGetCreatesResourceWhenNoneAvailable(t *testing.T) {
 	pool.Return(res)
 }
 
-func TestPoolSetMinSizeImmediatelyCreatesNewResources(t *testing.T) {
-	createFunc, _ := createCreateResourceFunc()
-	pool := puddle.NewPool(createFunc, stubCloseRes)
-	pool.SetMinSize(2)
-	assert.Equal(t, 2, pool.Size())
-}
-
 func TestPoolGetDoesNotCreatesResourceWhenItWouldExceedMaxSize(t *testing.T) {
 	createFunc, createCounter := createCreateResourceFunc()
 	pool := puddle.NewPool(createFunc, stubCloseRes)
@@ -128,7 +121,7 @@ func TestPoolGetDoesNotCreatesResourceWhenItWouldExceedMaxSize(t *testing.T) {
 
 func TestPoolGetReturnsErrorFromFailedResourceCreate(t *testing.T) {
 	errCreateFailed := errors.New("create failed")
-	createFunc := func() (interface{}, error) {
+	createFunc := func(ctx context.Context) (interface{}, error) {
 		return nil, errCreateFailed
 	}
 	pool := puddle.NewPool(createFunc, stubCloseRes)
@@ -158,7 +151,7 @@ func TestPoolGetReusesResources(t *testing.T) {
 }
 
 func TestPoolGetContextAlreadyCanceled(t *testing.T) {
-	createFunc := func() (interface{}, error) {
+	createFunc := func(ctx context.Context) (interface{}, error) {
 		panic("should never be called")
 	}
 	pool := puddle.NewPool(createFunc, stubCloseRes)
@@ -172,11 +165,16 @@ func TestPoolGetContextAlreadyCanceled(t *testing.T) {
 
 func TestPoolGetContextCanceledDuringCreate(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(100*time.Millisecond, cancel)
+	timeoutChan := time.After(1 * time.Second)
 
 	var createCalls Counter
-	createFunc := func() (interface{}, error) {
-		cancel()
-		time.Sleep(1 * time.Second)
+	createFunc := func(ctx context.Context) (interface{}, error) {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-timeoutChan:
+		}
 		return createCalls.Next(), nil
 	}
 	pool := puddle.NewPool(createFunc, stubCloseRes)
@@ -306,47 +304,6 @@ func TestPoolRemoveRemovesResourceFromPool(t *testing.T) {
 	assert.Equal(t, 0, pool.Size())
 }
 
-func TestPoolRemoveRemovesResourceFromPoolAndStartsNewCreationToMaintainMinSize(t *testing.T) {
-	createFunc, createCounter, createCallsChan := createCreateResourceFuncWithNotifierChan()
-	closeFunc, closeCalls, closeCallsChan := createCloseResourceFuncWithNotifierChan()
-
-	pool := puddle.NewPool(createFunc, closeFunc)
-
-	// Ensure there are 2 resources available in pool
-	{
-		r1, err := pool.Get(context.Background())
-		require.Nil(t, err)
-		r2, err := pool.Get(context.Background())
-		require.Nil(t, err)
-		pool.Return(r1)
-		pool.Return(r2)
-	}
-
-	assert.Equal(t, 2, pool.Size())
-	pool.SetMinSize(2)
-	assert.Equal(t, 2, pool.Size())
-
-	{
-		r1, err := pool.Get(context.Background())
-		require.Nil(t, err)
-		r2, err := pool.Get(context.Background())
-		require.Nil(t, err)
-		pool.Remove(r1)
-		pool.Remove(r2)
-	}
-
-	require.True(t, waitForRead(createCallsChan))
-	require.True(t, waitForRead(createCallsChan))
-	require.True(t, waitForRead(createCallsChan))
-	require.True(t, waitForRead(createCallsChan))
-	require.True(t, waitForRead(closeCallsChan))
-	require.True(t, waitForRead(closeCallsChan))
-
-	assert.Equal(t, 2, pool.Size())
-	assert.Equal(t, 4, createCounter.Value())
-	assert.Equal(t, 2, closeCalls.Value())
-}
-
 func TestPoolRemoveRemovesResourceFromPoolAndDoesNotStartNewCreationToMaintainMinSizeWhenPoolIsClosed(t *testing.T) {
 	createFunc, createCounter, createCallsChan := createCreateResourceFuncWithNotifierChan()
 	closeFunc, closeCalls, closeCallsChan := createCloseResourceFuncWithNotifierChan()
@@ -397,47 +354,6 @@ func TestPoolGetReturnsErrorWhenPoolIsClosed(t *testing.T) {
 	res, err := pool.Get(context.Background())
 	assert.Equal(t, puddle.ErrClosedPool, err)
 	assert.Nil(t, res)
-}
-
-func TestPoolGetLateFailedCreateErrorIsReported(t *testing.T) {
-	errCreateStartedChan := make(chan struct{})
-	createWaitChan := make(chan struct{})
-	errCreateFailed := errors.New("create failed")
-	var createCalls Counter
-	createFunc := func() (interface{}, error) {
-		n := createCalls.Next()
-		if n == 1 {
-			return n, nil
-		}
-		close(errCreateStartedChan)
-		<-createWaitChan
-		return nil, errCreateFailed
-	}
-	pool := puddle.NewPool(createFunc, stubCloseRes)
-
-	asyncErrChan := make(chan error)
-	pool.SetBackgroundErrorHandler(func(err error) { asyncErrChan <- err })
-
-	res1, err := pool.Get(context.Background())
-	require.NoError(t, err)
-	assert.Equal(t, 1, res1)
-
-	go func() {
-		<-errCreateStartedChan
-		pool.Return(res1)
-	}()
-
-	res, err := pool.Get(context.Background())
-	require.NoError(t, err)
-	assert.Equal(t, 1, res)
-	close(createWaitChan)
-
-	select {
-	case err = <-asyncErrChan:
-		assert.Equal(t, errCreateFailed, err)
-	case <-time.NewTimer(time.Second).C:
-		t.Fatal("timed out waiting for async error")
-	}
 }
 
 func TestPoolCloseResourceCloseErrorIsReported(t *testing.T) {

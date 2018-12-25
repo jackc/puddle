@@ -20,7 +20,7 @@ const maxInt = int(maxUint >> 1)
 // ErrClosedPool occurs on an attempt to get a connection from a closed pool.
 var ErrClosedPool = errors.New("cannot get from closed pool")
 
-type CreateFunc func() (res interface{}, err error)
+type CreateFunc func(ctx context.Context) (res interface{}, err error)
 type CloseFunc func(res interface{}) (err error)
 
 // BackgroundErrorHandler is the type of function that handles background
@@ -108,8 +108,6 @@ func (p *Pool) SetMinSize(n int) {
 	}
 	p.cond.L.Lock()
 	p.minSize = n
-
-	p.ensureMinResources()
 
 	p.cond.L.Unlock()
 }
@@ -206,11 +204,26 @@ func (p *Pool) Get(ctx context.Context) (interface{}, error) {
 		return res, nil
 	}
 
-	// If there is room to create a resource start the process asynchronously
-	var createResChan chan interface{}
-	var createErrChan chan error
+	// If there is room to create a resource do so
 	if len(p.allResources) < p.maxSize {
-		createResChan, createErrChan = p.startCreate()
+		var localVal int
+		placeholder := &localVal
+		startTime := time.Now()
+		p.allResources[placeholder] = &resourceWrapper{resource: placeholder, creationTime: startTime, status: resourceStatusCreating}
+		p.cond.L.Unlock()
+
+		res, err := p.createRes(ctx)
+		p.cond.L.Lock()
+		delete(p.allResources, placeholder)
+		if err != nil {
+			p.cond.L.Unlock()
+			return nil, err
+		}
+
+		rw := &resourceWrapper{resource: res, creationTime: startTime, status: resourceStatusBorrowed, checkoutCount: 1}
+		p.allResources[res] = rw
+		p.cond.L.Unlock()
+		return res, nil
 	}
 	p.cond.L.Unlock()
 
@@ -239,16 +252,8 @@ func (p *Pool) Get(ctx context.Context) (interface{}, error) {
 	select {
 	case <-ctx.Done():
 		close(abortWaitResChan)
-		p.backgroundFinishCreate(createResChan, createErrChan)
 		return nil, ctx.Err()
-	case err := <-createErrChan:
-		close(abortWaitResChan)
-		return nil, err
-	case res := <-createResChan:
-		close(abortWaitResChan)
-		return res, nil
 	case res := <-waitResChan:
-		p.backgroundFinishCreate(createResChan, createErrChan)
 		return res, nil
 	}
 }
@@ -275,50 +280,6 @@ func (p *Pool) lockedAvailableGet() interface{} {
 	rw.status = resourceStatusBorrowed
 	rw.checkoutCount += 1
 	return rw.resource
-}
-
-// startCreate starts creating a new resource. p.cond.L must already be
-// locked. The newly created resource will be sent on resChan (already checked
-// out) or an error will be sent on errChan.
-func (p *Pool) startCreate() (resChan chan interface{}, errChan chan error) {
-	resChan = make(chan interface{})
-	errChan = make(chan error)
-
-	var localVal int
-	placeholder := &localVal
-	startTime := time.Now()
-	p.allResources[placeholder] = &resourceWrapper{resource: placeholder, creationTime: startTime, status: resourceStatusCreating}
-
-	go func() {
-		res, err := p.createRes()
-		p.cond.L.Lock()
-		delete(p.allResources, placeholder)
-		if err != nil {
-			p.cond.L.Unlock()
-			errChan <- err
-			return
-		}
-
-		rw := &resourceWrapper{resource: res, creationTime: startTime, status: resourceStatusBorrowed, checkoutCount: 1}
-		p.allResources[res] = rw
-		p.cond.L.Unlock()
-		resChan <- res
-	}()
-
-	return resChan, errChan
-}
-
-func (p *Pool) backgroundFinishCreate(resChan chan interface{}, errChan chan error) {
-	go func() {
-		select {
-		case res := <-resChan:
-			p.Return(res)
-		case err := <-errChan:
-			p.cond.L.Lock()
-			p.backgroundErrorHandler(err)
-			p.cond.L.Unlock()
-		}
-	}()
 }
 
 func (p *Pool) backgroundClose(res interface{}) {
@@ -359,7 +320,6 @@ func (p *Pool) Return(res interface{}) {
 
 	if closeResource {
 		delete(p.allResources, rw.resource)
-		p.ensureMinResources()
 		p.cond.L.Unlock()
 		p.backgroundClose(rw.resource)
 		return
@@ -394,17 +354,4 @@ func (p *Pool) Remove(res interface{}) {
 			p.cond.L.Unlock()
 		}
 	}()
-
-	p.ensureMinResources()
-}
-
-// ensureMinResources creates new resources if necessary to get pool up to min size.
-// If pool is closed does nothing. p.cond.L must already be locked.
-func (p *Pool) ensureMinResources() {
-	if !p.closed {
-		for len(p.allResources) < p.minSize {
-			createResChan, createErrChan := p.startCreate()
-			p.backgroundFinishCreate(createResChan, createErrChan)
-		}
-	}
 }
