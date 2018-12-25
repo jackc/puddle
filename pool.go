@@ -250,12 +250,6 @@ func (p *Pool) lockedAvailableGet() interface{} {
 	return rw.resource
 }
 
-func (p *Pool) backgroundClose(res interface{}) {
-	go func() {
-		p.closeRes(res)
-	}()
-}
-
 // Return returns res to the the pool. If res is not part of the pool Return
 // will panic.
 func (p *Pool) Return(res interface{}) {
@@ -267,17 +261,11 @@ func (p *Pool) Return(res interface{}) {
 		panic("Return called on resource that does not belong to pool")
 	}
 
-	if p.closed {
-		delete(p.allResources, rw.resource)
-		p.cond.L.Unlock()
-		p.backgroundClose(rw.resource)
-		return
-	}
-
 	closeResource := true
 
 	now := time.Now()
-	if now.Sub(rw.creationTime) > p.maxResourceDuration {
+	if p.closed {
+	} else if now.Sub(rw.creationTime) > p.maxResourceDuration {
 	} else if p.maxResourceCheckouts <= rw.checkoutCount { // use <= instead of == as maxResourceCheckouts may be lowered while pool is in use
 	} else {
 		closeResource = false
@@ -286,7 +274,7 @@ func (p *Pool) Return(res interface{}) {
 	if closeResource {
 		delete(p.allResources, rw.resource)
 		p.cond.L.Unlock()
-		p.backgroundClose(rw.resource)
+		go p.closeRes(rw.resource)
 		return
 	}
 
