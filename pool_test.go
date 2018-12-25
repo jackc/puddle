@@ -60,18 +60,16 @@ func createCreateResourceFuncWithNotifierChan() (puddle.CreateFunc, *Counter, ch
 func createCloseResourceFuncWithNotifierChan() (puddle.CloseFunc, *Counter, chan int) {
 	ch := make(chan int)
 	var c Counter
-	f := func(interface{}) error {
+	f := func(interface{}) {
 		n := c.Next()
 
 		// Because the tests will not read from ch until after the close function f returns.
 		go func() { ch <- n }()
-
-		return nil
 	}
 	return f, &c, ch
 }
 
-func stubCloseRes(interface{}) error { return nil }
+func stubCloseRes(interface{}) {}
 
 func waitForRead(ch chan int) bool {
 	select {
@@ -233,9 +231,8 @@ func TestPoolCloseClosesAllAvailableResources(t *testing.T) {
 	createFunc, _ := createCreateResourceFunc()
 
 	var closeCalls Counter
-	closeFunc := func(interface{}) error {
+	closeFunc := func(interface{}) {
 		closeCalls.Next()
-		return nil
 	}
 
 	p := puddle.NewPool(createFunc, closeFunc)
@@ -354,56 +351,6 @@ func TestPoolGetReturnsErrorWhenPoolIsClosed(t *testing.T) {
 	res, err := pool.Get(context.Background())
 	assert.Equal(t, puddle.ErrClosedPool, err)
 	assert.Nil(t, res)
-}
-
-func TestPoolCloseResourceCloseErrorIsReported(t *testing.T) {
-	createFunc, _ := createCreateResourceFunc()
-	errCloseFailed := errors.New("close failed")
-	closeFunc := func(res interface{}) error { return errCloseFailed }
-	pool := puddle.NewPool(createFunc, closeFunc)
-	asyncErrChan := make(chan error, 1)
-	pool.SetBackgroundErrorHandler(func(err error) { asyncErrChan <- err })
-
-	// Get and return a resource to put something in the pool
-	res, err := pool.Get(context.Background())
-	require.NoError(t, err)
-	assert.Equal(t, 1, res)
-	pool.Return(res)
-
-	pool.Close()
-
-	select {
-	case err = <-asyncErrChan:
-		assert.Equal(t, errCloseFailed, err)
-	default:
-		t.Fatal("error not reported")
-	}
-}
-
-func TestPoolReturnClosesResourcePoolIsAlreadyClosedErrorIsReported(t *testing.T) {
-	createFunc, _ := createCreateResourceFunc()
-
-	errCloseFailed := errors.New("close failed")
-	closeFunc := func(res interface{}) error { return errCloseFailed }
-	pool := puddle.NewPool(createFunc, closeFunc)
-
-	asyncErrChan := make(chan error, 1)
-	pool.SetBackgroundErrorHandler(func(err error) { asyncErrChan <- err })
-
-	// Get and return a resource to put something in the pool
-	res, err := pool.Get(context.Background())
-	require.NoError(t, err)
-	assert.Equal(t, 1, res)
-
-	pool.Close()
-
-	pool.Return(res)
-	select {
-	case err = <-asyncErrChan:
-		assert.Equal(t, errCloseFailed, err)
-	case <-time.NewTimer(time.Second).C:
-		t.Fatal("timed out waiting for async error")
-	}
 }
 
 func BenchmarkPoolGetAndReturn(b *testing.B) {

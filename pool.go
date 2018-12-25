@@ -21,12 +21,7 @@ const maxInt = int(maxUint >> 1)
 var ErrClosedPool = errors.New("cannot get from closed pool")
 
 type CreateFunc func(ctx context.Context) (res interface{}, err error)
-type CloseFunc func(res interface{}) (err error)
-
-// BackgroundErrorHandler is the type of function that handles background
-// errors. It may be called while the pool is locked. Therefore it must not call
-// any pool methods and should not perform any lengthy operations.
-type BackgroundErrorHandler func(err error)
+type CloseFunc func(res interface{})
 
 type resourceWrapper struct {
 	resource      interface{}
@@ -47,21 +42,19 @@ type Pool struct {
 	maxResourceCheckouts uint64
 	closed               bool
 
-	createRes              CreateFunc
-	closeRes               CloseFunc
-	backgroundErrorHandler BackgroundErrorHandler
+	createRes CreateFunc
+	closeRes  CloseFunc
 }
 
 func NewPool(createRes CreateFunc, closeRes CloseFunc) *Pool {
 	return &Pool{
-		cond:                   sync.NewCond(new(sync.Mutex)),
-		allResources:           make(map[interface{}]*resourceWrapper),
-		maxSize:                maxInt,
-		maxResourceDuration:    math.MaxInt64,
-		maxResourceCheckouts:   math.MaxUint64,
-		createRes:              createRes,
-		closeRes:               closeRes,
-		backgroundErrorHandler: func(error) {},
+		cond:                 sync.NewCond(new(sync.Mutex)),
+		allResources:         make(map[interface{}]*resourceWrapper),
+		maxSize:              maxInt,
+		maxResourceDuration:  math.MaxInt64,
+		maxResourceCheckouts: math.MaxUint64,
+		createRes:            createRes,
+		closeRes:             closeRes,
 	}
 }
 
@@ -72,10 +65,7 @@ func (p *Pool) Close() {
 	p.closed = true
 
 	for _, rw := range p.availableResources {
-		err := p.closeRes(rw.resource)
-		if err != nil {
-			p.backgroundErrorHandler(err)
-		}
+		p.closeRes(rw.resource)
 		delete(p.allResources, rw.resource)
 	}
 	p.availableResources = nil
@@ -166,17 +156,6 @@ func (p *Pool) SetMaxResourceCheckouts(n uint64) {
 	p.cond.L.Unlock()
 }
 
-// SetBackgroundErrorHandler assigns a handler for errors that have no other
-// place to be reported. For example, Get is called when no resources are
-// available. Get begins creating a new resource (in a goroutine). Before the
-// new resource is completed, the context passed to Get is canceled. Then the
-// new resource creation fails. f will be called with that error.
-func (p *Pool) SetBackgroundErrorHandler(f BackgroundErrorHandler) {
-	p.cond.L.Lock()
-	p.backgroundErrorHandler = f
-	p.cond.L.Unlock()
-}
-
 // Get gets a resource from the pool. If no resources are available and the pool
 // is not at maximum capacity it will create a new resource. If the pool is at
 // maximum capacity it will block until a resource is available. ctx can be used
@@ -258,17 +237,6 @@ func (p *Pool) Get(ctx context.Context) (interface{}, error) {
 	}
 }
 
-// func (p *Pool) backgroundReportError(errChan chan error) {
-// 	go func() {
-// 		err := <-errChan
-// 		if err != nil {
-// 			p.cond.L.Lock()
-// 			p.backgroundErrorHandler(err)
-// 			p.cond.L.Unlock()
-// 		}
-// 	}()
-// }
-
 // lockedAvailableGet gets the top resource from p.availableResources. p.cond.L
 // must already be locked. len(p.availableResources) must be > 0.
 func (p *Pool) lockedAvailableGet() interface{} {
@@ -284,10 +252,7 @@ func (p *Pool) lockedAvailableGet() interface{} {
 
 func (p *Pool) backgroundClose(res interface{}) {
 	go func() {
-		err := p.closeRes(res)
-		if err != nil {
-			p.backgroundErrorHandler(err)
-		}
+		p.closeRes(res)
 	}()
 }
 
@@ -347,11 +312,6 @@ func (p *Pool) Remove(res interface{}) {
 
 	// close the resource in the background
 	go func() {
-		err := p.closeRes(res)
-		if err != nil {
-			p.cond.L.Lock()
-			p.backgroundErrorHandler(err)
-			p.cond.L.Unlock()
-		}
+		p.closeRes(res)
 	}()
 }
