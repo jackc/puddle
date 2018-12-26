@@ -23,19 +23,32 @@ var ErrClosedPool = errors.New("cannot get from closed pool")
 type CreateFunc func(ctx context.Context) (res interface{}, err error)
 type CloseFunc func(res interface{})
 
-type resourceWrapper struct {
-	resource      interface{}
+type Resource struct {
+	value         interface{}
+	pool          *Pool
 	creationTime  time.Time
 	checkoutCount uint64
 	status        byte
+}
+
+func (res *Resource) Value() interface{} {
+	return res.value
+}
+
+func (res *Resource) Release() {
+	res.pool.releaseBorrowedResource(res.value)
+}
+
+func (res *Resource) Destroy() {
+	res.pool.destroyBorrowedResource(res.value)
 }
 
 // Pool is a thread-safe resource pool.
 type Pool struct {
 	cond *sync.Cond
 
-	allResources         map[interface{}]*resourceWrapper
-	availableResources   []*resourceWrapper
+	allResources         map[interface{}]*Resource
+	availableResources   []*Resource
 	minSize              int
 	maxSize              int
 	maxResourceDuration  time.Duration
@@ -49,7 +62,7 @@ type Pool struct {
 func NewPool(createRes CreateFunc, closeRes CloseFunc) *Pool {
 	return &Pool{
 		cond:                 sync.NewCond(new(sync.Mutex)),
-		allResources:         make(map[interface{}]*resourceWrapper),
+		allResources:         make(map[interface{}]*Resource),
 		maxSize:              maxInt,
 		maxResourceDuration:  math.MaxInt64,
 		maxResourceCheckouts: math.MaxUint64,
@@ -65,8 +78,8 @@ func (p *Pool) Close() {
 	p.closed = true
 
 	for _, rw := range p.availableResources {
-		p.closeRes(rw.resource)
-		delete(p.allResources, rw.resource)
+		p.closeRes(rw.value)
+		delete(p.allResources, rw.value)
 	}
 	p.availableResources = nil
 	p.cond.L.Unlock()
@@ -160,7 +173,7 @@ func (p *Pool) SetMaxResourceCheckouts(n uint64) {
 // is not at maximum capacity it will create a new resource. If the pool is at
 // maximum capacity it will block until a resource is available. ctx can be used
 // to cancel the Get.
-func (p *Pool) Get(ctx context.Context) (interface{}, error) {
+func (p *Pool) Get(ctx context.Context) (*Resource, error) {
 	if doneChan := ctx.Done(); doneChan != nil {
 		select {
 		case <-ctx.Done():
@@ -178,9 +191,9 @@ func (p *Pool) Get(ctx context.Context) (interface{}, error) {
 
 	// If a resource is available now
 	if len(p.availableResources) > 0 {
-		res := p.lockedAvailableGet()
+		rw := p.lockedAvailableGet()
 		p.cond.L.Unlock()
-		return res, nil
+		return rw, nil
 	}
 
 	// If there is room to create a resource do so
@@ -188,7 +201,7 @@ func (p *Pool) Get(ctx context.Context) (interface{}, error) {
 		var localVal int
 		placeholder := &localVal
 		startTime := time.Now()
-		p.allResources[placeholder] = &resourceWrapper{resource: placeholder, creationTime: startTime, status: resourceStatusCreating}
+		p.allResources[placeholder] = &Resource{value: placeholder, creationTime: startTime, status: resourceStatusCreating}
 		p.cond.L.Unlock()
 
 		res, err := p.createRes(ctx)
@@ -199,15 +212,15 @@ func (p *Pool) Get(ctx context.Context) (interface{}, error) {
 			return nil, err
 		}
 
-		rw := &resourceWrapper{resource: res, creationTime: startTime, status: resourceStatusBorrowed, checkoutCount: 1}
+		rw := &Resource{pool: p, value: res, creationTime: startTime, status: resourceStatusBorrowed, checkoutCount: 1}
 		p.allResources[res] = rw
 		p.cond.L.Unlock()
-		return res, nil
+		return rw, nil
 	}
 	p.cond.L.Unlock()
 
 	// Wait for a resource to be returned to the pool.
-	waitResChan := make(chan interface{})
+	waitResChan := make(chan *Resource)
 	abortWaitResChan := make(chan struct{})
 	go func() {
 		p.cond.L.Lock()
@@ -218,13 +231,13 @@ func (p *Pool) Get(ctx context.Context) (interface{}, error) {
 			p.cond.L.Unlock()
 			return
 		}
-		res := p.lockedAvailableGet()
+		rw := p.lockedAvailableGet()
 		p.cond.L.Unlock()
 
 		select {
 		case <-abortWaitResChan:
-			p.Return(res)
-		case waitResChan <- res:
+			p.releaseBorrowedResource(rw.value)
+		case waitResChan <- rw:
 		}
 	}()
 
@@ -232,14 +245,14 @@ func (p *Pool) Get(ctx context.Context) (interface{}, error) {
 	case <-ctx.Done():
 		close(abortWaitResChan)
 		return nil, ctx.Err()
-	case res := <-waitResChan:
-		return res, nil
+	case rw := <-waitResChan:
+		return rw, nil
 	}
 }
 
 // lockedAvailableGet gets the top resource from p.availableResources. p.cond.L
 // must already be locked. len(p.availableResources) must be > 0.
-func (p *Pool) lockedAvailableGet() interface{} {
+func (p *Pool) lockedAvailableGet() *Resource {
 	rw := p.availableResources[len(p.availableResources)-1]
 	p.availableResources = p.availableResources[:len(p.availableResources)-1]
 	if rw.status != resourceStatusAvailable {
@@ -247,19 +260,14 @@ func (p *Pool) lockedAvailableGet() interface{} {
 	}
 	rw.status = resourceStatusBorrowed
 	rw.checkoutCount += 1
-	return rw.resource
+	return rw
 }
 
-// Return returns res to the the pool. If res is not part of the pool Return
-// will panic.
-func (p *Pool) Return(res interface{}) {
+// releaseBorrowedResource returns res to the the pool.
+func (p *Pool) releaseBorrowedResource(res interface{}) {
 	p.cond.L.Lock()
 
-	rw, present := p.allResources[res]
-	if !present {
-		p.cond.L.Unlock()
-		panic("Return called on resource that does not belong to pool")
-	}
+	rw := p.allResources[res]
 
 	closeResource := true
 
@@ -272,9 +280,9 @@ func (p *Pool) Return(res interface{}) {
 	}
 
 	if closeResource {
-		delete(p.allResources, rw.resource)
+		delete(p.allResources, rw.value)
 		p.cond.L.Unlock()
-		go p.closeRes(rw.resource)
+		go p.closeRes(rw.value)
 		return
 	}
 
@@ -287,7 +295,7 @@ func (p *Pool) Return(res interface{}) {
 
 // Remove removes res from the pool and closes it. If res is not part of the
 // pool Remove will panic.
-func (p *Pool) Remove(res interface{}) {
+func (p *Pool) destroyBorrowedResource(res interface{}) {
 	p.cond.L.Lock()
 	defer p.cond.L.Unlock()
 
@@ -296,7 +304,7 @@ func (p *Pool) Remove(res interface{}) {
 		panic("Remove called on resource that does not belong to pool")
 	}
 
-	delete(p.allResources, rw.resource)
+	delete(p.allResources, rw.value)
 
 	// close the resource in the background
 	go func() {
