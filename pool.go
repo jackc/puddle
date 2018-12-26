@@ -10,6 +10,7 @@ const (
 	resourceStatusCreating  = 0
 	resourceStatusAvailable = iota
 	resourceStatusBorrowed  = iota
+	resourceStatusHijacked  = iota
 )
 
 const maxUint = ^uint(0)
@@ -32,11 +33,26 @@ func (res *Resource) Value() interface{} {
 }
 
 func (res *Resource) Release() {
+	if res.status != resourceStatusBorrowed {
+		panic("tried to release resource that is not acquired")
+	}
 	res.pool.releaseBorrowedResource(res)
 }
 
 func (res *Resource) Destroy() {
+	if res.status != resourceStatusBorrowed {
+		panic("tried to destroy resource that is not acquired")
+	}
 	res.pool.destroyBorrowedResource(res)
+}
+
+// Hijack removes the resource from the pool without destroying it. Caller is
+// responsible for cleanup of resource value.
+func (res *Resource) Hijack() {
+	if res.status != resourceStatusBorrowed {
+		panic("tried to hijack resource that is not acquired")
+	}
+	res.pool.hijackBorrowedResource(res)
 }
 
 // Pool is a thread-safe resource pool.
@@ -239,6 +255,17 @@ func (p *Pool) destroyBorrowedResource(res *Resource) {
 
 	p.allResources = removeResource(p.allResources, res)
 	go p.destructResourceValue(res.value)
+
+	p.cond.L.Unlock()
+	p.cond.Signal()
+}
+
+func (p *Pool) hijackBorrowedResource(res *Resource) {
+	p.cond.L.Lock()
+
+	p.allResources = removeResource(p.allResources, res)
+	res.status = resourceStatusHijacked
+	p.destructWG.Done() // not responsible for destructing hijacked resources
 
 	p.cond.L.Unlock()
 	p.cond.Signal()

@@ -265,6 +265,25 @@ func TestPoolCloseBlocksUntilAllResourcesReleasedAndClosed(t *testing.T) {
 
 func TestResourceDestroyRemovesResourceFromPool(t *testing.T) {
 	createFunc, _ := createCreateResourceFunc()
+	var closeCalls Counter
+	closeFunc := func(interface{}) {
+		closeCalls.Next()
+	}
+
+	pool := puddle.NewPool(createFunc, closeFunc)
+
+	res, err := pool.Acquire(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 1, res.Value())
+
+	res.Hijack()
+
+	assert.Equal(t, 0, pool.Size())
+	assert.Equal(t, 0, closeCalls.Value())
+}
+
+func TestResourceHijackRemovesResourceFromPoolButDoesNotDestroy(t *testing.T) {
+	createFunc, _ := createCreateResourceFunc()
 	pool := puddle.NewPool(createFunc, stubCloseRes)
 
 	res, err := pool.Acquire(context.Background())
