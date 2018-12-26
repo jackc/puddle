@@ -32,22 +32,23 @@ func (res *Resource) Value() interface{} {
 }
 
 func (res *Resource) Release() {
-	res.pool.releaseBorrowedResource(res.value)
+	res.pool.releaseBorrowedResource(res)
 }
 
 func (res *Resource) Destroy() {
-	res.pool.destroyBorrowedResource(res.value)
+	res.pool.destroyBorrowedResource(res)
 }
 
 // Pool is a thread-safe resource pool.
 type Pool struct {
 	cond *sync.Cond
 
-	allResources       map[interface{}]*Resource
+	allResources       []*Resource
 	availableResources []*Resource
-	minSize            int
-	maxSize            int
-	closed             bool
+
+	minSize int
+	maxSize int
+	closed  bool
 
 	createRes CreateFunc
 	closeRes  CloseFunc
@@ -55,11 +56,10 @@ type Pool struct {
 
 func NewPool(createRes CreateFunc, closeRes CloseFunc) *Pool {
 	return &Pool{
-		cond:         sync.NewCond(new(sync.Mutex)),
-		allResources: make(map[interface{}]*Resource),
-		maxSize:      maxInt,
-		createRes:    createRes,
-		closeRes:     closeRes,
+		cond:      sync.NewCond(new(sync.Mutex)),
+		maxSize:   maxInt,
+		createRes: createRes,
+		closeRes:  closeRes,
 	}
 }
 
@@ -69,9 +69,9 @@ func (p *Pool) Close() {
 	p.cond.L.Lock()
 	p.closed = true
 
-	for _, rw := range p.availableResources {
-		p.closeRes(rw.value)
-		delete(p.allResources, rw.value)
+	for _, res := range p.availableResources {
+		p.closeRes(res.value)
+		p.allResources = removeResource(p.allResources, res)
 	}
 	p.availableResources = nil
 	p.cond.L.Unlock()
@@ -154,23 +154,22 @@ func (p *Pool) Acquire(ctx context.Context) (*Resource, error) {
 
 	// If there is room to create a resource do so
 	if len(p.allResources) < p.maxSize {
-		var localVal int
-		placeholder := &localVal
-		p.allResources[placeholder] = &Resource{value: placeholder, status: resourceStatusCreating}
+		res := &Resource{pool: p, status: resourceStatusCreating}
+		p.allResources = append(p.allResources, res)
 		p.cond.L.Unlock()
 
-		res, err := p.createRes(ctx)
+		value, err := p.createRes(ctx)
 		p.cond.L.Lock()
-		delete(p.allResources, placeholder)
 		if err != nil {
+			p.allResources = removeResource(p.allResources, res)
 			p.cond.L.Unlock()
 			return nil, err
 		}
 
-		rw := &Resource{pool: p, value: res, status: resourceStatusBorrowed}
-		p.allResources[res] = rw
+		res.value = value
+		res.status = resourceStatusBorrowed
 		p.cond.L.Unlock()
-		return rw, nil
+		return res, nil
 	}
 	p.cond.L.Unlock()
 
@@ -191,7 +190,7 @@ func (p *Pool) Acquire(ctx context.Context) (*Resource, error) {
 
 		select {
 		case <-abortWaitResChan:
-			p.releaseBorrowedResource(rw.value)
+			p.releaseBorrowedResource(rw)
 		case waitResChan <- rw:
 		}
 	}()
@@ -218,20 +217,18 @@ func (p *Pool) lockedAvailableAcquire() *Resource {
 }
 
 // releaseBorrowedResource returns res to the the pool.
-func (p *Pool) releaseBorrowedResource(res interface{}) {
+func (p *Pool) releaseBorrowedResource(res *Resource) {
 	p.cond.L.Lock()
 
-	rw := p.allResources[res]
-
 	if p.closed {
-		delete(p.allResources, rw.value)
+		p.allResources = removeResource(p.allResources, res)
 		p.cond.L.Unlock()
-		go p.closeRes(rw.value)
+		go p.closeRes(res.value)
 		return
 	}
 
-	rw.status = resourceStatusAvailable
-	p.availableResources = append(p.availableResources, rw)
+	res.status = resourceStatusAvailable
+	p.availableResources = append(p.availableResources, res)
 
 	p.cond.L.Unlock()
 	p.cond.Signal()
@@ -239,17 +236,22 @@ func (p *Pool) releaseBorrowedResource(res interface{}) {
 
 // Remove removes res from the pool and closes it. If res is not part of the
 // pool Remove will panic.
-func (p *Pool) destroyBorrowedResource(res interface{}) {
+func (p *Pool) destroyBorrowedResource(res *Resource) {
 	p.cond.L.Lock()
-	defer p.cond.L.Unlock()
-
-	rw, present := p.allResources[res]
-	if !present {
-		panic("Remove called on resource that does not belong to pool")
-	}
-
-	delete(p.allResources, rw.value)
+	p.allResources = removeResource(p.allResources, res)
+	p.cond.L.Unlock()
 
 	// close the resource in the background
-	go p.closeRes(res)
+	go p.closeRes(res.value)
+}
+
+func removeResource(slice []*Resource, res *Resource) []*Resource {
+	for i := range slice {
+		if slice[i] == res {
+			slice[i] = slice[len(slice)-1]
+			return slice[:len(slice)-1]
+		}
+	}
+
+	return slice
 }
