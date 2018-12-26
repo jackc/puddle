@@ -310,7 +310,7 @@ func TestPoolStatResources(t *testing.T) {
 	close(endWaitChan)
 }
 
-func TestPoolStatCounters(t *testing.T) {
+func TestPoolStatSuccessfulAcquireCounters(t *testing.T) {
 	createFunc, _ := createCreateResourceFunc()
 	pool := puddle.NewPool(createFunc, stubCloseRes, 1)
 	defer pool.Close()
@@ -348,6 +348,60 @@ func TestPoolStatCounters(t *testing.T) {
 	stat = pool.Stat()
 	assert.Equal(t, int64(4), stat.AcquireCount())
 	assert.Equal(t, int64(2), stat.SlowAcquireCount())
+}
+
+func TestPoolStatCanceledAcquireBeforeStart(t *testing.T) {
+	createFunc, _ := createCreateResourceFunc()
+	pool := puddle.NewPool(createFunc, stubCloseRes, 1)
+	defer pool.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := pool.Acquire(ctx)
+	require.Equal(t, context.Canceled, err)
+
+	stat := pool.Stat()
+	assert.Equal(t, int64(0), stat.AcquireCount())
+	assert.Equal(t, int64(1), stat.CanceledAcquireCount())
+}
+
+func TestPoolStatCanceledAcquireDuringCreate(t *testing.T) {
+	createFunc := func(ctx context.Context) (interface{}, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+
+	pool := puddle.NewPool(createFunc, stubCloseRes, 1)
+	defer pool.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(50*time.Millisecond, cancel)
+	_, err := pool.Acquire(ctx)
+	require.Equal(t, context.Canceled, err)
+
+	stat := pool.Stat()
+	assert.Equal(t, int64(0), stat.AcquireCount())
+	assert.Equal(t, int64(1), stat.CanceledAcquireCount())
+}
+
+func TestPoolStatCanceledAcquireDuringWait(t *testing.T) {
+	createFunc, _ := createCreateResourceFunc()
+	pool := puddle.NewPool(createFunc, stubCloseRes, 1)
+	defer pool.Close()
+
+	res, err := pool.Acquire(context.Background())
+	require.Nil(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(50*time.Millisecond, cancel)
+	_, err = pool.Acquire(ctx)
+	require.Equal(t, context.Canceled, err)
+
+	res.Release()
+
+	stat := pool.Stat()
+	assert.Equal(t, int64(1), stat.AcquireCount())
+	assert.Equal(t, int64(1), stat.CanceledAcquireCount())
 }
 
 func TestResourceDestroyRemovesResourceFromPool(t *testing.T) {
