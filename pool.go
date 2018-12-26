@@ -140,67 +140,64 @@ func (p *Pool) Acquire(ctx context.Context) (*Resource, error) {
 
 	p.cond.L.Lock()
 
-	if p.closed {
-		p.cond.L.Unlock()
-		return nil, ErrClosedPool
-	}
-
-	// If a resource is available now
-	if len(p.availableResources) > 0 {
-		rw := p.lockedAvailableAcquire()
-		p.cond.L.Unlock()
-		return rw, nil
-	}
-
-	// If there is room to create a resource do so
-	if len(p.allResources) < p.maxSize {
-		res := &Resource{pool: p, status: resourceStatusCreating}
-		p.allResources = append(p.allResources, res)
-		p.cond.L.Unlock()
-
-		value, err := p.createRes(ctx)
-		p.cond.L.Lock()
-		if err != nil {
-			p.allResources = removeResource(p.allResources, res)
-			p.cond.L.Unlock()
-			return nil, err
-		}
-
-		res.value = value
-		res.status = resourceStatusBorrowed
-		p.cond.L.Unlock()
-		return res, nil
-	}
-	p.cond.L.Unlock()
-
-	// Wait for a resource to be returned to the pool.
-	waitResChan := make(chan *Resource)
-	abortWaitResChan := make(chan struct{})
-	go func() {
-		p.cond.L.Lock()
-		for len(p.availableResources) == 0 {
-			p.cond.Wait()
-		}
+	for {
 		if p.closed {
 			p.cond.L.Unlock()
-			return
+			return nil, ErrClosedPool
 		}
-		rw := p.lockedAvailableAcquire()
-		p.cond.L.Unlock()
+
+		// If a resource is available now
+		if len(p.availableResources) > 0 {
+			rw := p.lockedAvailableAcquire()
+			p.cond.L.Unlock()
+			return rw, nil
+		}
+
+		// If there is room to create a resource do so
+		if len(p.allResources) < p.maxSize {
+			res := &Resource{pool: p, status: resourceStatusCreating}
+			p.allResources = append(p.allResources, res)
+			p.cond.L.Unlock()
+
+			value, err := p.createRes(ctx)
+			p.cond.L.Lock()
+			if err != nil {
+				p.allResources = removeResource(p.allResources, res)
+				p.cond.L.Unlock()
+				return nil, err
+			}
+
+			res.value = value
+			res.status = resourceStatusBorrowed
+			p.cond.L.Unlock()
+			return res, nil
+		}
+
+		// if ctx.Done() == nil {
+		// 	p.cond.Wait()
+		// } else {
+
+		// Convert p.cond.Wait into a channel
+		waitChan := make(chan struct{}, 1)
+		go func() {
+			p.cond.Wait()
+			waitChan <- struct{}{}
+		}()
 
 		select {
-		case <-abortWaitResChan:
-			p.releaseBorrowedResource(rw)
-		case waitResChan <- rw:
-		}
-	}()
+		case <-ctx.Done():
+			// Allow goroutine waiting for signal to exit. Re-signal since we couldn't
+			// do anything with it. Another goroutine might be waiting.
+			go func() {
+				<-waitChan
+				p.cond.Signal()
+				p.cond.L.Unlock()
+			}()
 
-	select {
-	case <-ctx.Done():
-		close(abortWaitResChan)
-		return nil, ctx.Err()
-	case rw := <-waitResChan:
-		return rw, nil
+			return nil, ctx.Err()
+		case <-waitChan:
+		}
+		// }
 	}
 }
 
@@ -240,6 +237,7 @@ func (p *Pool) destroyBorrowedResource(res *Resource) {
 	p.cond.L.Lock()
 	p.allResources = removeResource(p.allResources, res)
 	p.cond.L.Unlock()
+	p.cond.Signal()
 
 	// close the resource in the background
 	go p.closeRes(res.value)
