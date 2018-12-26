@@ -1,14 +1,11 @@
 # Puddle
 
-Puddle is a generic resource pool library for Go.
+Puddle is a tiny generic resource pool library for Go that uses the standard context library to signal cancellation of acquires. It is designed to contain the minimum functionality a resource pool needs that cannot be implemented without concerrency concerns. For example, a database connection pool may use puddle internally and implement health checks and keep-alive behavior without needing to implement any concurrent code of its own.
 
-## TODO
+## Features
 
-* Max resource lifetime
-* Max resource idle time
-* Resource keep alive
-* Resource health check - keep alive and health check might be same thing
-* Reset pool
-* Shrink pool
-* Stress test
-* Stat - supercede Size, include available resources, checked out resources, get count, slow get count, slow get wait time, total create count, total background error count
+* Acquire cancellation via context standard library
+* Statistics API for monitoring pool pressure
+* No dependencies outside of standard library
+* High performance
+* 100% test coverage

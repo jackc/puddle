@@ -14,12 +14,17 @@ const (
 	resourceStatusHijacked     = iota
 )
 
-// ErrClosedPool occurs on an attempt to get a connection from a closed pool.
-var ErrClosedPool = errors.New("cannot get from closed pool")
+// ErrClosedPool occurs on an attempt to acquire a connection from a closed pool
+// or a pool that is closed while the acquire is waiting.
+var ErrClosedPool = errors.New("closed pool")
 
+// Constructor is a function called by the pool to construct a resource.
 type Constructor func(ctx context.Context) (res interface{}, err error)
+
+// Destructor is a function called by the pool to destroy a resource.
 type Destructor func(res interface{})
 
+// Resource is the resource handle returned by acquiring from the pool.
 type Resource struct {
 	value        interface{}
 	pool         *Pool
@@ -27,10 +32,15 @@ type Resource struct {
 	status       byte
 }
 
+// Value returns the resource value.
 func (res *Resource) Value() interface{} {
+	if !(res.status == resourceStatusAcquired || res.status == resourceStatusHijacked) {
+		panic("tried to access resource that is not acquired or hijacked")
+	}
 	return res.value
 }
 
+// Release returns the resource to the pool. res must not be subsequently used.
 func (res *Resource) Release() {
 	if res.status != resourceStatusAcquired {
 		panic("tried to release resource that is not acquired")
@@ -38,6 +48,8 @@ func (res *Resource) Release() {
 	res.pool.releaseAcquiredResource(res)
 }
 
+// Destroy returns the resource to the pool for destruction. res must not be
+// subsequently used.
 func (res *Resource) Destroy() {
 	if res.status != resourceStatusAcquired {
 		panic("tried to destroy resource that is not acquired")
@@ -45,8 +57,8 @@ func (res *Resource) Destroy() {
 	res.pool.destroyAcquiredResource(res)
 }
 
-// Hijack removes the resource from the pool without destroying it. Caller is
-// responsible for cleanup of resource value.
+// Hijack assumes ownership of the resource from the pool. Caller is responsible
+// for cleanup of resource value.
 func (res *Resource) Hijack() {
 	if res.status != resourceStatusAcquired {
 		panic("tried to hijack resource that is not acquired")
@@ -56,13 +68,13 @@ func (res *Resource) Hijack() {
 
 // CreationTime returns when the resource was created by the pool.
 func (res *Resource) CreationTime() time.Time {
-	if res.status != resourceStatusAcquired {
-		panic("tried to use resource that is not acquired")
+	if !(res.status == resourceStatusAcquired || res.status == resourceStatusHijacked) {
+		panic("tried to access resource that is not acquired or hijacked")
 	}
 	return res.creationTime
 }
 
-// Pool is a thread-safe resource pool.
+// Pool is a concurrency-safe resource pool.
 type Pool struct {
 	cond       *sync.Cond
 	destructWG *sync.WaitGroup
@@ -82,6 +94,7 @@ type Pool struct {
 	closed bool
 }
 
+// NewPool creates a new pool.
 func NewPool(constructor Constructor, destructor Destructor, maxSize int) *Pool {
 	return &Pool{
 		cond:        sync.NewCond(new(sync.Mutex)),
@@ -92,8 +105,8 @@ func NewPool(constructor Constructor, destructor Destructor, maxSize int) *Pool 
 	}
 }
 
-// Close closes all resources in the pool and rejects future Acquire calls.
-// Blocks until all resources are returned to pool and closed.
+// Close destroys all resources in the pool and rejects future Acquire calls.
+// Blocks until all resources are returned to pool and destroyed.
 func (p *Pool) Close() {
 	p.cond.L.Lock()
 	p.closed = true
@@ -111,6 +124,7 @@ func (p *Pool) Close() {
 	p.destructWG.Wait()
 }
 
+// Stat is a snapshot of Pool statistics.
 type Stat struct {
 	constructingResources int
 	acquiredResources     int
@@ -122,7 +136,7 @@ type Stat struct {
 	canceledAcquireCount  int64
 }
 
-// TotalResource returns the total number of resources in the pool.
+// TotalResource returns the total number of resources.
 func (s *Stat) TotalResources() int {
 	return s.constructingResources + s.acquiredResources + s.idleResources
 }
@@ -143,7 +157,7 @@ func (s *Stat) IdleResources() int {
 	return s.idleResources
 }
 
-// MaxResources returns the maximum size of the pool
+// MaxResources returns the maximum size of the pool.
 func (s *Stat) MaxResources() int {
 	return s.maxResources
 }
