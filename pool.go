@@ -7,10 +7,10 @@ import (
 )
 
 const (
-	resourceStatusCreating = 0
-	resourceStatusIdle     = iota
-	resourceStatusAcquired = iota
-	resourceStatusHijacked = iota
+	resourceStatusConstructing = 0
+	resourceStatusIdle         = iota
+	resourceStatusAcquired     = iota
+	resourceStatusHijacked     = iota
 )
 
 // ErrClosedPool occurs on an attempt to get a connection from a closed pool.
@@ -96,20 +96,59 @@ func (p *Pool) Close() {
 	p.destructWG.Wait()
 }
 
-// Size returns the current size of the pool.
-func (p *Pool) Size() int {
-	p.cond.L.Lock()
-	n := len(p.allResources)
-	p.cond.L.Unlock()
-	return n
+type Stat struct {
+	constructing int
+	acquired     int
+	idle         int
+	maxSize      int
 }
 
-// MaxSize returns the current maximum size of the pool.
-func (p *Pool) MaxSize() int {
+// Size returns the total number of resources in the pool.
+func (s *Stat) Size() int {
+	return s.constructing + s.acquired + s.idle
+}
+
+// Constructing returns the number of resources with construction in progress in
+// the pool.
+func (s *Stat) Constructing() int {
+	return s.constructing
+}
+
+// Acquired returns the number of acquired resources in the pool.
+func (s *Stat) Acquired() int {
+	return s.acquired
+}
+
+// Idle returns the number of idle resources in the pool.
+func (s *Stat) Idle() int {
+	return s.idle
+}
+
+// MaxSize returns the maximum size of the pool
+func (s *Stat) MaxSize() int {
+	return s.maxSize
+}
+
+// Stat returns the current pool statistics.
+func (p *Pool) Stat() *Stat {
 	p.cond.L.Lock()
-	n := p.maxSize
+	s := &Stat{
+		maxSize: p.maxSize,
+	}
+
+	for _, res := range p.allResources {
+		switch res.status {
+		case resourceStatusConstructing:
+			s.constructing += 1
+		case resourceStatusIdle:
+			s.idle += 1
+		case resourceStatusAcquired:
+			s.acquired += 1
+		}
+	}
+
 	p.cond.L.Unlock()
-	return n
+	return s
 }
 
 // Acquire gets a resource from the pool. If no resources are available and the pool
@@ -142,7 +181,7 @@ func (p *Pool) Acquire(ctx context.Context) (*Resource, error) {
 
 		// If there is room to create a resource do so
 		if len(p.allResources) < p.maxSize {
-			res := &Resource{pool: p, status: resourceStatusCreating}
+			res := &Resource{pool: p, status: resourceStatusConstructing}
 			p.allResources = append(p.allResources, res)
 			p.cond.L.Unlock()
 

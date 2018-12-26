@@ -113,7 +113,7 @@ func TestPoolAcquireDoesNotCreatesResourceWhenItWouldExceedMaxSize(t *testing.T)
 	wg.Wait()
 
 	assert.Equal(t, 1, createCounter.Value())
-	assert.Equal(t, 1, pool.Size())
+	assert.Equal(t, 1, pool.Stat().Size())
 }
 
 func TestPoolAcquireWithCancellableContext(t *testing.T) {
@@ -140,7 +140,7 @@ func TestPoolAcquireWithCancellableContext(t *testing.T) {
 	wg.Wait()
 
 	assert.Equal(t, 1, createCounter.Value())
-	assert.Equal(t, 1, pool.Size())
+	assert.Equal(t, 1, pool.Stat().Size())
 }
 
 func TestPoolAcquireReturnsErrorFromFailedResourceCreate(t *testing.T) {
@@ -261,6 +261,55 @@ func TestPoolCloseBlocksUntilAllResourcesReleasedAndClosed(t *testing.T) {
 	assert.Equal(t, len(resources), closeCalls.Value())
 }
 
+func TestPoolStat(t *testing.T) {
+	startWaitChan := make(chan struct{})
+	waitingChan := make(chan struct{})
+	endWaitChan := make(chan struct{})
+
+	var createCalls Counter
+	createFunc := func(ctx context.Context) (interface{}, error) {
+		select {
+		case <-startWaitChan:
+			close(waitingChan)
+			<-endWaitChan
+		default:
+		}
+
+		return createCalls.Next(), nil
+	}
+	pool := puddle.NewPool(createFunc, stubCloseRes, 10)
+	defer pool.Close()
+
+	resAcquired, err := pool.Acquire(context.Background())
+	require.Nil(t, err)
+
+	close(startWaitChan)
+	go func() {
+		res, err := pool.Acquire(context.Background())
+		require.Nil(t, err)
+		res.Release()
+	}()
+	<-waitingChan
+	stat := pool.Stat()
+
+	assert.Equal(t, 2, stat.Size())
+	assert.Equal(t, 1, stat.Constructing())
+	assert.Equal(t, 1, stat.Acquired())
+	assert.Equal(t, 0, stat.Idle())
+	assert.Equal(t, 10, stat.MaxSize())
+
+	resAcquired.Release()
+
+	stat = pool.Stat()
+	assert.Equal(t, 2, stat.Size())
+	assert.Equal(t, 1, stat.Constructing())
+	assert.Equal(t, 0, stat.Acquired())
+	assert.Equal(t, 1, stat.Idle())
+	assert.Equal(t, 10, stat.MaxSize())
+
+	close(endWaitChan)
+}
+
 func TestResourceDestroyRemovesResourceFromPool(t *testing.T) {
 	createFunc, _ := createCreateResourceFunc()
 	var closeCalls Counter
@@ -276,7 +325,7 @@ func TestResourceDestroyRemovesResourceFromPool(t *testing.T) {
 
 	res.Hijack()
 
-	assert.Equal(t, 0, pool.Size())
+	assert.Equal(t, 0, pool.Stat().Size())
 	assert.Equal(t, 0, closeCalls.Value())
 }
 
@@ -288,9 +337,9 @@ func TestResourceHijackRemovesResourceFromPoolButDoesNotDestroy(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, res.Value())
 
-	assert.Equal(t, 1, pool.Size())
+	assert.Equal(t, 1, pool.Stat().Size())
 	res.Destroy()
-	assert.Equal(t, 0, pool.Size())
+	assert.Equal(t, 0, pool.Stat().Size())
 }
 
 func TestPoolAcquireReturnsErrorWhenPoolIsClosed(t *testing.T) {
