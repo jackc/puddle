@@ -3,9 +3,7 @@ package puddle
 import (
 	"context"
 	"errors"
-	"math"
 	"sync"
-	"time"
 )
 
 const (
@@ -24,11 +22,9 @@ type CreateFunc func(ctx context.Context) (res interface{}, err error)
 type CloseFunc func(res interface{})
 
 type Resource struct {
-	value         interface{}
-	pool          *Pool
-	creationTime  time.Time
-	checkoutCount uint64
-	status        byte
+	value  interface{}
+	pool   *Pool
+	status byte
 }
 
 func (res *Resource) Value() interface{} {
@@ -47,13 +43,11 @@ func (res *Resource) Destroy() {
 type Pool struct {
 	cond *sync.Cond
 
-	allResources         map[interface{}]*Resource
-	availableResources   []*Resource
-	minSize              int
-	maxSize              int
-	maxResourceDuration  time.Duration
-	maxResourceCheckouts uint64
-	closed               bool
+	allResources       map[interface{}]*Resource
+	availableResources []*Resource
+	minSize            int
+	maxSize            int
+	closed             bool
 
 	createRes CreateFunc
 	closeRes  CloseFunc
@@ -61,13 +55,11 @@ type Pool struct {
 
 func NewPool(createRes CreateFunc, closeRes CloseFunc) *Pool {
 	return &Pool{
-		cond:                 sync.NewCond(new(sync.Mutex)),
-		allResources:         make(map[interface{}]*Resource),
-		maxSize:              maxInt,
-		maxResourceDuration:  math.MaxInt64,
-		maxResourceCheckouts: math.MaxUint64,
-		createRes:            createRes,
-		closeRes:             closeRes,
+		cond:         sync.NewCond(new(sync.Mutex)),
+		allResources: make(map[interface{}]*Resource),
+		maxSize:      maxInt,
+		createRes:    createRes,
+		closeRes:     closeRes,
 	}
 }
 
@@ -133,42 +125,6 @@ func (p *Pool) SetMaxSize(n int) {
 	p.cond.L.Unlock()
 }
 
-// MaxResourceDuration returns the current maximum resource duration of the pool.
-func (p *Pool) MaxResourceDuration() time.Duration {
-	p.cond.L.Lock()
-	n := p.maxResourceDuration
-	p.cond.L.Unlock()
-	return n
-}
-
-// SetMaxResourceDuration sets the maximum maximum resource duration of the pool. It panics if n < 1.
-func (p *Pool) SetMaxResourceDuration(d time.Duration) {
-	if d < 0 {
-		panic("pool MaxResourceDuration cannot be < 0")
-	}
-	p.cond.L.Lock()
-	p.maxResourceDuration = d
-	p.cond.L.Unlock()
-}
-
-// MaxResourceCheckouts returns the current maximum uses per resource of the pool.
-func (p *Pool) MaxResourceCheckouts() uint64 {
-	p.cond.L.Lock()
-	n := p.maxResourceCheckouts
-	p.cond.L.Unlock()
-	return n
-}
-
-// SetMaxResourceCheckouts sets the maximum maximum resource duration of the pool. It panics if n < 1.
-func (p *Pool) SetMaxResourceCheckouts(n uint64) {
-	if n < 0 {
-		panic("pool MaxResourceCheckouts cannot be < 1")
-	}
-	p.cond.L.Lock()
-	p.maxResourceCheckouts = n
-	p.cond.L.Unlock()
-}
-
 // Acquire gets a resource from the pool. If no resources are available and the pool
 // is not at maximum capacity it will create a new resource. If the pool is at
 // maximum capacity it will block until a resource is available. ctx can be used
@@ -200,8 +156,7 @@ func (p *Pool) Acquire(ctx context.Context) (*Resource, error) {
 	if len(p.allResources) < p.maxSize {
 		var localVal int
 		placeholder := &localVal
-		startTime := time.Now()
-		p.allResources[placeholder] = &Resource{value: placeholder, creationTime: startTime, status: resourceStatusCreating}
+		p.allResources[placeholder] = &Resource{value: placeholder, status: resourceStatusCreating}
 		p.cond.L.Unlock()
 
 		res, err := p.createRes(ctx)
@@ -212,7 +167,7 @@ func (p *Pool) Acquire(ctx context.Context) (*Resource, error) {
 			return nil, err
 		}
 
-		rw := &Resource{pool: p, value: res, creationTime: startTime, status: resourceStatusBorrowed, checkoutCount: 1}
+		rw := &Resource{pool: p, value: res, status: resourceStatusBorrowed}
 		p.allResources[res] = rw
 		p.cond.L.Unlock()
 		return rw, nil
@@ -259,7 +214,6 @@ func (p *Pool) lockedAvailableAcquire() *Resource {
 		panic("BUG: unavailable resource gotten from availableResources")
 	}
 	rw.status = resourceStatusBorrowed
-	rw.checkoutCount += 1
 	return rw
 }
 
@@ -269,17 +223,7 @@ func (p *Pool) releaseBorrowedResource(res interface{}) {
 
 	rw := p.allResources[res]
 
-	closeResource := true
-
-	now := time.Now()
 	if p.closed {
-	} else if now.Sub(rw.creationTime) > p.maxResourceDuration {
-	} else if p.maxResourceCheckouts <= rw.checkoutCount { // use <= instead of == as maxResourceCheckouts may be lowered while pool is in use
-	} else {
-		closeResource = false
-	}
-
-	if closeResource {
 		delete(p.allResources, rw.value)
 		p.cond.L.Unlock()
 		go p.closeRes(rw.value)

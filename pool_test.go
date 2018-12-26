@@ -182,44 +182,6 @@ func TestPoolAcquireContextCanceledDuringCreate(t *testing.T) {
 	assert.Nil(t, res)
 }
 
-func TestResourceReleaseClosesAndRemovesResourceIfOlderThanMaxDuration(t *testing.T) {
-	createFunc, _ := createCreateResourceFunc()
-	closeFunc, closeCalls, closeCallsChan := createCloseResourceFuncWithNotifierChan()
-
-	pool := puddle.NewPool(createFunc, closeFunc)
-
-	res, err := pool.Acquire(context.Background())
-	require.NoError(t, err)
-
-	assert.Equal(t, 1, pool.Size())
-
-	pool.SetMaxResourceDuration(time.Nanosecond)
-	time.Sleep(2 * time.Nanosecond)
-	res.Release()
-
-	waitForRead(closeCallsChan)
-	assert.Equal(t, 0, pool.Size())
-	assert.Equal(t, 1, closeCalls.Value())
-}
-
-func TestResourceReleaseClosesAndRemovesResourceWhenResourceCheckoutCountIsMaxResourceCheckouts(t *testing.T) {
-	createFunc, _ := createCreateResourceFunc()
-	closeFunc, closeCalls, closeCallsChan := createCloseResourceFuncWithNotifierChan()
-
-	pool := puddle.NewPool(createFunc, closeFunc)
-	pool.SetMaxResourceCheckouts(1)
-
-	res, err := pool.Acquire(context.Background())
-	require.NoError(t, err)
-
-	res.Release()
-
-	waitForRead(closeCallsChan)
-
-	assert.Equal(t, 1, closeCalls.Value())
-	assert.Equal(t, 0, pool.Size())
-}
-
 func TestPoolCloseClosesAllAvailableResources(t *testing.T) {
 	createFunc, _ := createCreateResourceFunc()
 
