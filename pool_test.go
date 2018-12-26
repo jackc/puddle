@@ -76,6 +76,7 @@ func TestPoolAcquireCreatesResourceWhenNoneIdle(t *testing.T) {
 	res, err := pool.Acquire(context.Background())
 	require.NoError(t, err)
 	assert.Equal(t, 1, res.Value())
+	assert.WithinDuration(t, time.Now(), res.CreationTime(), time.Second)
 	res.Release()
 }
 

@@ -21,9 +21,10 @@ type Constructor func(ctx context.Context) (res interface{}, err error)
 type Destructor func(res interface{})
 
 type Resource struct {
-	value  interface{}
-	pool   *Pool
-	status byte
+	value        interface{}
+	pool         *Pool
+	creationTime time.Time
+	status       byte
 }
 
 func (res *Resource) Value() interface{} {
@@ -51,6 +52,14 @@ func (res *Resource) Hijack() {
 		panic("tried to hijack resource that is not acquired")
 	}
 	res.pool.hijackAcquiredResource(res)
+}
+
+// CreationTime returns when the resource was created by the pool.
+func (res *Resource) CreationTime() time.Time {
+	if res.status != resourceStatusAcquired {
+		panic("tried to use resource that is not acquired")
+	}
+	return res.creationTime
 }
 
 // Pool is a thread-safe resource pool.
@@ -232,7 +241,7 @@ func (p *Pool) Acquire(ctx context.Context) (*Resource, error) {
 
 		// If there is room to create a resource do so
 		if len(p.allResources) < p.maxSize {
-			res := &Resource{pool: p, status: resourceStatusConstructing}
+			res := &Resource{pool: p, creationTime: startTime, status: resourceStatusConstructing}
 			p.allResources = append(p.allResources, res)
 			p.destructWG.Add(1)
 			p.cond.L.Unlock()
