@@ -302,6 +302,23 @@ func (p *Pool) Acquire(ctx context.Context) (*Resource, error) {
 	}
 }
 
+// AcquireAllIdle atomically acquires all currently idle resources. Its intended
+// use is for health check and keep-alive functionality. It does not update pool
+// statistics.
+func (p *Pool) AcquireAllIdle() []*Resource {
+	p.cond.L.Lock()
+
+	for _, res := range p.idleResources {
+		res.status = resourceStatusAcquired
+	}
+	resources := make([]*Resource, len(p.idleResources))
+	copy(resources, p.idleResources)
+	p.idleResources = p.idleResources[0:0]
+
+	p.cond.L.Unlock()
+	return resources
+}
+
 // releaseAcquiredResource returns res to the the pool.
 func (p *Pool) releaseAcquiredResource(res *Resource) {
 	p.cond.L.Lock()

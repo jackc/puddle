@@ -197,6 +197,43 @@ func TestPoolAcquireContextCanceledDuringCreate(t *testing.T) {
 	assert.Nil(t, res)
 }
 
+func TestPoolAcquireAllIdle(t *testing.T) {
+	constructor, _ := createConstructor()
+	pool := puddle.NewPool(constructor, stubDestructor, 10)
+	defer pool.Close()
+
+	resources := make([]*puddle.Resource, 4)
+	var err error
+
+	resources[0], err = pool.Acquire(context.Background())
+	require.NoError(t, err)
+	resources[1], err = pool.Acquire(context.Background())
+	require.NoError(t, err)
+	resources[2], err = pool.Acquire(context.Background())
+	require.NoError(t, err)
+	resources[3], err = pool.Acquire(context.Background())
+	require.NoError(t, err)
+
+	assert.Len(t, pool.AcquireAllIdle(), 0)
+
+	resources[0].Release()
+	resources[3].Release()
+
+	assert.ElementsMatch(t, []*puddle.Resource{resources[0], resources[3]}, pool.AcquireAllIdle())
+
+	resources[0].Release()
+	resources[3].Release()
+	resources[1].Release()
+	resources[2].Release()
+
+	assert.ElementsMatch(t, resources, pool.AcquireAllIdle())
+
+	resources[0].Release()
+	resources[1].Release()
+	resources[2].Release()
+	resources[3].Release()
+}
+
 func TestPoolCloseClosesAllIdleResources(t *testing.T) {
 	constructor, _ := createConstructor()
 
