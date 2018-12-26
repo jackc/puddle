@@ -35,7 +35,7 @@ func (c *Counter) Value() int {
 	return n
 }
 
-func createCreateResourceFunc() (puddle.CreateFunc, *Counter) {
+func createCreateResourceFunc() (puddle.Constructor, *Counter) {
 	var c Counter
 	f := func(ctx context.Context) (interface{}, error) {
 		return c.Next(), nil
@@ -43,7 +43,7 @@ func createCreateResourceFunc() (puddle.CreateFunc, *Counter) {
 	return f, &c
 }
 
-func createCreateResourceFuncWithNotifierChan() (puddle.CreateFunc, *Counter, chan int) {
+func createCreateResourceFuncWithNotifierChan() (puddle.Constructor, *Counter, chan int) {
 	ch := make(chan int)
 	var c Counter
 	f := func(ctx context.Context) (interface{}, error) {
@@ -57,7 +57,7 @@ func createCreateResourceFuncWithNotifierChan() (puddle.CreateFunc, *Counter, ch
 	return f, &c, ch
 }
 
-func createCloseResourceFuncWithNotifierChan() (puddle.CloseFunc, *Counter, chan int) {
+func createCloseResourceFuncWithNotifierChan() (puddle.Destructor, *Counter, chan int) {
 	ch := make(chan int)
 	var c Counter
 	f := func(interface{}) {
@@ -208,9 +208,12 @@ func TestPoolCloseClosesAllAvailableResources(t *testing.T) {
 	assert.Equal(t, len(resources), closeCalls.Value())
 }
 
-func TestPoolReleaseClosesResourcePoolIsAlreadyClosed(t *testing.T) {
+func TestPoolCloseBlocksUntilAllResourcesReleasedAndClosed(t *testing.T) {
 	createFunc, _ := createCreateResourceFunc()
-	closeFunc, closeCalls, closeCallsChan := createCloseResourceFuncWithNotifierChan()
+	var closeCalls Counter
+	closeFunc := func(interface{}) {
+		closeCalls.Next()
+	}
 
 	p := puddle.NewPool(createFunc, closeFunc)
 
@@ -221,18 +224,14 @@ func TestPoolReleaseClosesResourcePoolIsAlreadyClosed(t *testing.T) {
 		require.Nil(t, err)
 	}
 
-	p.Close()
-	assert.Equal(t, 0, closeCalls.Value())
-
 	for _, res := range resources {
-		res.Release()
+		go func() {
+			time.Sleep(100 * time.Millisecond)
+			res.Release()
+		}()
 	}
 
-	waitForRead(closeCallsChan)
-	waitForRead(closeCallsChan)
-	waitForRead(closeCallsChan)
-	waitForRead(closeCallsChan)
-
+	p.Close()
 	assert.Equal(t, len(resources), closeCalls.Value())
 }
 
