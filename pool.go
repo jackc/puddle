@@ -13,9 +13,6 @@ const (
 	resourceStatusHijacked  = iota
 )
 
-const maxUint = ^uint(0)
-const maxInt = int(maxUint >> 1)
-
 // ErrClosedPool occurs on an attempt to get a connection from a closed pool.
 var ErrClosedPool = errors.New("cannot get from closed pool")
 
@@ -70,11 +67,11 @@ type Pool struct {
 	destructor  Destructor
 }
 
-func NewPool(constructor Constructor, destructor Destructor) *Pool {
+func NewPool(constructor Constructor, destructor Destructor, maxSize int) *Pool {
 	return &Pool{
 		cond:        sync.NewCond(new(sync.Mutex)),
 		destructWG:  &sync.WaitGroup{},
-		maxSize:     maxInt,
+		maxSize:     maxSize,
 		constructor: constructor,
 		destructor:  destructor,
 	}
@@ -113,16 +110,6 @@ func (p *Pool) MaxSize() int {
 	n := p.maxSize
 	p.cond.L.Unlock()
 	return n
-}
-
-// SetMaxSize sets the maximum size of the pool. It panics if n < 1.
-func (p *Pool) SetMaxSize(n int) {
-	if n < 1 {
-		panic("pool MaxSize cannot be < 1")
-	}
-	p.cond.L.Lock()
-	p.maxSize = n
-	p.cond.L.Unlock()
 }
 
 // Acquire gets a resource from the pool. If no resources are available and the pool
