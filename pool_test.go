@@ -279,10 +279,10 @@ func TestPoolCloseBlocksUntilAllResourcesReleasedAndClosed(t *testing.T) {
 	}
 
 	for _, res := range resources {
-		go func() {
+		go func(res *puddle.Resource) {
 			time.Sleep(100 * time.Millisecond)
 			res.Release()
-		}()
+		}(res)
 	}
 
 	p.Close()
