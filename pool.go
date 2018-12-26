@@ -307,7 +307,5 @@ func (p *Pool) destroyBorrowedResource(res interface{}) {
 	delete(p.allResources, rw.value)
 
 	// close the resource in the background
-	go func() {
-		p.closeRes(res)
-	}()
+	go p.closeRes(res)
 }
