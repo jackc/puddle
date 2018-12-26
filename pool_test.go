@@ -35,7 +35,7 @@ func (c *Counter) Value() int {
 	return n
 }
 
-func createCreateResourceFunc() (puddle.Constructor, *Counter) {
+func createConstructor() (puddle.Constructor, *Counter) {
 	var c Counter
 	f := func(ctx context.Context) (interface{}, error) {
 		return c.Next(), nil
@@ -43,7 +43,7 @@ func createCreateResourceFunc() (puddle.Constructor, *Counter) {
 	return f, &c
 }
 
-func createCreateResourceFuncWithNotifierChan() (puddle.Constructor, *Counter, chan int) {
+func createConstructorWithNotifierChan() (puddle.Constructor, *Counter, chan int) {
 	ch := make(chan int)
 	var c Counter
 	f := func(ctx context.Context) (interface{}, error) {
@@ -57,19 +57,7 @@ func createCreateResourceFuncWithNotifierChan() (puddle.Constructor, *Counter, c
 	return f, &c, ch
 }
 
-func createCloseResourceFuncWithNotifierChan() (puddle.Destructor, *Counter, chan int) {
-	ch := make(chan int)
-	var c Counter
-	f := func(interface{}) {
-		n := c.Next()
-
-		// Because the tests will not read from ch until after the close function f returns.
-		go func() { ch <- n }()
-	}
-	return f, &c, ch
-}
-
-func stubCloseRes(interface{}) {}
+func stubDestructor(interface{}) {}
 
 func waitForRead(ch chan int) bool {
 	select {
@@ -81,8 +69,8 @@ func waitForRead(ch chan int) bool {
 }
 
 func TestPoolAcquireCreatesResourceWhenNoneIdle(t *testing.T) {
-	createFunc, _ := createCreateResourceFunc()
-	pool := puddle.NewPool(createFunc, stubCloseRes, 10)
+	constructor, _ := createConstructor()
+	pool := puddle.NewPool(constructor, stubDestructor, 10)
 	defer pool.Close()
 
 	res, err := pool.Acquire(context.Background())
@@ -92,8 +80,8 @@ func TestPoolAcquireCreatesResourceWhenNoneIdle(t *testing.T) {
 }
 
 func TestPoolAcquireDoesNotCreatesResourceWhenItWouldExceedMaxSize(t *testing.T) {
-	createFunc, createCounter := createCreateResourceFunc()
-	pool := puddle.NewPool(createFunc, stubCloseRes, 1)
+	constructor, createCounter := createConstructor()
+	pool := puddle.NewPool(constructor, stubDestructor, 1)
 
 	wg := &sync.WaitGroup{}
 
@@ -117,8 +105,8 @@ func TestPoolAcquireDoesNotCreatesResourceWhenItWouldExceedMaxSize(t *testing.T)
 }
 
 func TestPoolAcquireWithCancellableContext(t *testing.T) {
-	createFunc, createCounter := createCreateResourceFunc()
-	pool := puddle.NewPool(createFunc, stubCloseRes, 1)
+	constructor, createCounter := createConstructor()
+	pool := puddle.NewPool(constructor, stubDestructor, 1)
 
 	wg := &sync.WaitGroup{}
 
@@ -145,10 +133,10 @@ func TestPoolAcquireWithCancellableContext(t *testing.T) {
 
 func TestPoolAcquireReturnsErrorFromFailedResourceCreate(t *testing.T) {
 	errCreateFailed := errors.New("create failed")
-	createFunc := func(ctx context.Context) (interface{}, error) {
+	constructor := func(ctx context.Context) (interface{}, error) {
 		return nil, errCreateFailed
 	}
-	pool := puddle.NewPool(createFunc, stubCloseRes, 10)
+	pool := puddle.NewPool(constructor, stubDestructor, 10)
 
 	res, err := pool.Acquire(context.Background())
 	assert.Equal(t, errCreateFailed, err)
@@ -156,8 +144,8 @@ func TestPoolAcquireReturnsErrorFromFailedResourceCreate(t *testing.T) {
 }
 
 func TestPoolAcquireReusesResources(t *testing.T) {
-	createFunc, createCounter := createCreateResourceFunc()
-	pool := puddle.NewPool(createFunc, stubCloseRes, 10)
+	constructor, createCounter := createConstructor()
+	pool := puddle.NewPool(constructor, stubDestructor, 10)
 
 	res, err := pool.Acquire(context.Background())
 	require.NoError(t, err)
@@ -175,10 +163,10 @@ func TestPoolAcquireReusesResources(t *testing.T) {
 }
 
 func TestPoolAcquireContextAlreadyCanceled(t *testing.T) {
-	createFunc := func(ctx context.Context) (interface{}, error) {
+	constructor := func(ctx context.Context) (interface{}, error) {
 		panic("should never be called")
 	}
-	pool := puddle.NewPool(createFunc, stubCloseRes, 10)
+	pool := puddle.NewPool(constructor, stubDestructor, 10)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -192,16 +180,16 @@ func TestPoolAcquireContextCanceledDuringCreate(t *testing.T) {
 	time.AfterFunc(100*time.Millisecond, cancel)
 	timeoutChan := time.After(1 * time.Second)
 
-	var createCalls Counter
-	createFunc := func(ctx context.Context) (interface{}, error) {
+	var constructorCalls Counter
+	constructor := func(ctx context.Context) (interface{}, error) {
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		case <-timeoutChan:
 		}
-		return createCalls.Next(), nil
+		return constructorCalls.Next(), nil
 	}
-	pool := puddle.NewPool(createFunc, stubCloseRes, 10)
+	pool := puddle.NewPool(constructor, stubDestructor, 10)
 
 	res, err := pool.Acquire(ctx)
 	assert.Equal(t, context.Canceled, err)
@@ -209,14 +197,14 @@ func TestPoolAcquireContextCanceledDuringCreate(t *testing.T) {
 }
 
 func TestPoolCloseClosesAllIdleResources(t *testing.T) {
-	createFunc, _ := createCreateResourceFunc()
+	constructor, _ := createConstructor()
 
-	var closeCalls Counter
-	closeFunc := func(interface{}) {
-		closeCalls.Next()
+	var destructorCalls Counter
+	destructor := func(interface{}) {
+		destructorCalls.Next()
 	}
 
-	p := puddle.NewPool(createFunc, closeFunc, 10)
+	p := puddle.NewPool(constructor, destructor, 10)
 
 	resources := make([]*puddle.Resource, 4)
 	for i := range resources {
@@ -231,17 +219,17 @@ func TestPoolCloseClosesAllIdleResources(t *testing.T) {
 
 	p.Close()
 
-	assert.Equal(t, len(resources), closeCalls.Value())
+	assert.Equal(t, len(resources), destructorCalls.Value())
 }
 
 func TestPoolCloseBlocksUntilAllResourcesReleasedAndClosed(t *testing.T) {
-	createFunc, _ := createCreateResourceFunc()
-	var closeCalls Counter
-	closeFunc := func(interface{}) {
-		closeCalls.Next()
+	constructor, _ := createConstructor()
+	var destructorCalls Counter
+	destructor := func(interface{}) {
+		destructorCalls.Next()
 	}
 
-	p := puddle.NewPool(createFunc, closeFunc, 10)
+	p := puddle.NewPool(constructor, destructor, 10)
 
 	resources := make([]*puddle.Resource, 4)
 	for i := range resources {
@@ -258,7 +246,7 @@ func TestPoolCloseBlocksUntilAllResourcesReleasedAndClosed(t *testing.T) {
 	}
 
 	p.Close()
-	assert.Equal(t, len(resources), closeCalls.Value())
+	assert.Equal(t, len(resources), destructorCalls.Value())
 }
 
 func TestPoolStatResources(t *testing.T) {
@@ -266,8 +254,8 @@ func TestPoolStatResources(t *testing.T) {
 	waitingChan := make(chan struct{})
 	endWaitChan := make(chan struct{})
 
-	var createCalls Counter
-	createFunc := func(ctx context.Context) (interface{}, error) {
+	var constructorCalls Counter
+	constructor := func(ctx context.Context) (interface{}, error) {
 		select {
 		case <-startWaitChan:
 			close(waitingChan)
@@ -275,9 +263,9 @@ func TestPoolStatResources(t *testing.T) {
 		default:
 		}
 
-		return createCalls.Next(), nil
+		return constructorCalls.Next(), nil
 	}
-	pool := puddle.NewPool(createFunc, stubCloseRes, 10)
+	pool := puddle.NewPool(constructor, stubDestructor, 10)
 	defer pool.Close()
 
 	resAcquired, err := pool.Acquire(context.Background())
@@ -311,8 +299,8 @@ func TestPoolStatResources(t *testing.T) {
 }
 
 func TestPoolStatSuccessfulAcquireCounters(t *testing.T) {
-	createFunc, _ := createCreateResourceFunc()
-	pool := puddle.NewPool(createFunc, stubCloseRes, 1)
+	constructor, _ := createConstructor()
+	pool := puddle.NewPool(constructor, stubDestructor, 1)
 	defer pool.Close()
 
 	res, err := pool.Acquire(context.Background())
@@ -357,8 +345,8 @@ func TestPoolStatSuccessfulAcquireCounters(t *testing.T) {
 }
 
 func TestPoolStatCanceledAcquireBeforeStart(t *testing.T) {
-	createFunc, _ := createCreateResourceFunc()
-	pool := puddle.NewPool(createFunc, stubCloseRes, 1)
+	constructor, _ := createConstructor()
+	pool := puddle.NewPool(constructor, stubDestructor, 1)
 	defer pool.Close()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -372,12 +360,12 @@ func TestPoolStatCanceledAcquireBeforeStart(t *testing.T) {
 }
 
 func TestPoolStatCanceledAcquireDuringCreate(t *testing.T) {
-	createFunc := func(ctx context.Context) (interface{}, error) {
+	constructor := func(ctx context.Context) (interface{}, error) {
 		<-ctx.Done()
 		return nil, ctx.Err()
 	}
 
-	pool := puddle.NewPool(createFunc, stubCloseRes, 1)
+	pool := puddle.NewPool(constructor, stubDestructor, 1)
 	defer pool.Close()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -391,8 +379,8 @@ func TestPoolStatCanceledAcquireDuringCreate(t *testing.T) {
 }
 
 func TestPoolStatCanceledAcquireDuringWait(t *testing.T) {
-	createFunc, _ := createCreateResourceFunc()
-	pool := puddle.NewPool(createFunc, stubCloseRes, 1)
+	constructor, _ := createConstructor()
+	pool := puddle.NewPool(constructor, stubDestructor, 1)
 	defer pool.Close()
 
 	res, err := pool.Acquire(context.Background())
@@ -411,13 +399,13 @@ func TestPoolStatCanceledAcquireDuringWait(t *testing.T) {
 }
 
 func TestResourceDestroyRemovesResourceFromPool(t *testing.T) {
-	createFunc, _ := createCreateResourceFunc()
-	var closeCalls Counter
-	closeFunc := func(interface{}) {
-		closeCalls.Next()
+	constructor, _ := createConstructor()
+	var destructorCalls Counter
+	destructor := func(interface{}) {
+		destructorCalls.Next()
 	}
 
-	pool := puddle.NewPool(createFunc, closeFunc, 10)
+	pool := puddle.NewPool(constructor, destructor, 10)
 
 	res, err := pool.Acquire(context.Background())
 	require.NoError(t, err)
@@ -426,12 +414,12 @@ func TestResourceDestroyRemovesResourceFromPool(t *testing.T) {
 	res.Hijack()
 
 	assert.Equal(t, 0, pool.Stat().TotalResources())
-	assert.Equal(t, 0, closeCalls.Value())
+	assert.Equal(t, 0, destructorCalls.Value())
 }
 
 func TestResourceHijackRemovesResourceFromPoolButDoesNotDestroy(t *testing.T) {
-	createFunc, _ := createCreateResourceFunc()
-	pool := puddle.NewPool(createFunc, stubCloseRes, 10)
+	constructor, _ := createConstructor()
+	pool := puddle.NewPool(constructor, stubDestructor, 10)
 
 	res, err := pool.Acquire(context.Background())
 	require.NoError(t, err)
@@ -443,8 +431,8 @@ func TestResourceHijackRemovesResourceFromPoolButDoesNotDestroy(t *testing.T) {
 }
 
 func TestPoolAcquireReturnsErrorWhenPoolIsClosed(t *testing.T) {
-	createFunc, _ := createCreateResourceFunc()
-	pool := puddle.NewPool(createFunc, stubCloseRes, 10)
+	constructor, _ := createConstructor()
+	pool := puddle.NewPool(constructor, stubDestructor, 10)
 	pool.Close()
 
 	res, err := pool.Acquire(context.Background())
@@ -519,8 +507,8 @@ func BenchmarkPoolAcquireAndRelease(b *testing.B) {
 
 			wg := &sync.WaitGroup{}
 
-			createFunc, _ := createCreateResourceFunc()
-			pool := puddle.NewPool(createFunc, stubCloseRes, bm.poolSize)
+			constructor, _ := createConstructor()
+			pool := puddle.NewPool(constructor, stubDestructor, bm.poolSize)
 
 			for i := 0; i < bm.clientCount; i++ {
 				wg.Add(1)
