@@ -7,10 +7,10 @@ import (
 )
 
 const (
-	resourceStatusCreating  = 0
-	resourceStatusAvailable = iota
-	resourceStatusAcquired  = iota
-	resourceStatusHijacked  = iota
+	resourceStatusCreating = 0
+	resourceStatusIdle     = iota
+	resourceStatusAcquired = iota
+	resourceStatusHijacked = iota
 )
 
 // ErrClosedPool occurs on an attempt to get a connection from a closed pool.
@@ -57,8 +57,8 @@ type Pool struct {
 	cond       *sync.Cond
 	destructWG *sync.WaitGroup
 
-	allResources       []*Resource
-	availableResources []*Resource
+	allResources  []*Resource
+	idleResources []*Resource
 
 	maxSize int
 	closed  bool
@@ -83,11 +83,11 @@ func (p *Pool) Close() {
 	p.cond.L.Lock()
 	p.closed = true
 
-	for _, res := range p.availableResources {
+	for _, res := range p.idleResources {
 		p.allResources = removeResource(p.allResources, res)
 		go p.destructResourceValue(res.value)
 	}
-	p.availableResources = nil
+	p.idleResources = nil
 	p.cond.L.Unlock()
 
 	// Wake up all go routines waiting for a resource to be returned so they can terminate.
@@ -134,8 +134,8 @@ func (p *Pool) Acquire(ctx context.Context) (*Resource, error) {
 		}
 
 		// If a resource is available now
-		if len(p.availableResources) > 0 {
-			rw := p.lockedAvailableAcquire()
+		if len(p.idleResources) > 0 {
+			rw := p.lockedIdleAcquire()
 			p.cond.L.Unlock()
 			return rw, nil
 		}
@@ -187,13 +187,13 @@ func (p *Pool) Acquire(ctx context.Context) (*Resource, error) {
 	}
 }
 
-// lockedAvailableAcquire gets the top resource from p.availableResources. p.cond.L
-// must already be locked. len(p.availableResources) must be > 0.
-func (p *Pool) lockedAvailableAcquire() *Resource {
-	rw := p.availableResources[len(p.availableResources)-1]
-	p.availableResources = p.availableResources[:len(p.availableResources)-1]
-	if rw.status != resourceStatusAvailable {
-		panic("BUG: unavailable resource gotten from availableResources")
+// lockedIdleAcquire gets the top resource from p.idleResources. p.cond.L
+// must already be locked. len(p.idleResources) must be > 0.
+func (p *Pool) lockedIdleAcquire() *Resource {
+	rw := p.idleResources[len(p.idleResources)-1]
+	p.idleResources = p.idleResources[:len(p.idleResources)-1]
+	if rw.status != resourceStatusIdle {
+		panic("BUG: non-idle resource gotten from idleResources")
 	}
 	rw.status = resourceStatusAcquired
 	return rw
@@ -204,8 +204,8 @@ func (p *Pool) releaseAcquiredResource(res *Resource) {
 	p.cond.L.Lock()
 
 	if !p.closed {
-		res.status = resourceStatusAvailable
-		p.availableResources = append(p.availableResources, res)
+		res.status = resourceStatusIdle
+		p.idleResources = append(p.idleResources, res)
 	} else {
 		p.allResources = removeResource(p.allResources, res)
 		go p.destructResourceValue(res.value)

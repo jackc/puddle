@@ -80,7 +80,7 @@ func waitForRead(ch chan int) bool {
 	}
 }
 
-func TestPoolAcquireCreatesResourceWhenNoneAvailable(t *testing.T) {
+func TestPoolAcquireCreatesResourceWhenNoneIdle(t *testing.T) {
 	createFunc, _ := createCreateResourceFunc()
 	pool := puddle.NewPool(createFunc, stubCloseRes, 10)
 	defer pool.Close()
@@ -208,7 +208,7 @@ func TestPoolAcquireContextCanceledDuringCreate(t *testing.T) {
 	assert.Nil(t, res)
 }
 
-func TestPoolCloseClosesAllAvailableResources(t *testing.T) {
+func TestPoolCloseClosesAllIdleResources(t *testing.T) {
 	createFunc, _ := createCreateResourceFunc()
 
 	var closeCalls Counter
