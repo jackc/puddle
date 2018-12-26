@@ -13,3 +13,7 @@ Puddle is a tiny generic resource pool library for Go that uses the standard con
 ## Documentation
 
 https://godoc.org/github.com/jackc/puddle
+
+## License
+
+MIT
