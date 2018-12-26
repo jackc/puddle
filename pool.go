@@ -177,31 +177,30 @@ func (p *Pool) Acquire(ctx context.Context) (*Resource, error) {
 			return res, nil
 		}
 
-		// if ctx.Done() == nil {
-		// 	p.cond.Wait()
-		// } else {
-
-		// Convert p.cond.Wait into a channel
-		waitChan := make(chan struct{}, 1)
-		go func() {
+		if ctx.Done() == nil {
 			p.cond.Wait()
-			waitChan <- struct{}{}
-		}()
-
-		select {
-		case <-ctx.Done():
-			// Allow goroutine waiting for signal to exit. Re-signal since we couldn't
-			// do anything with it. Another goroutine might be waiting.
+		} else {
+			// Convert p.cond.Wait into a channel
+			waitChan := make(chan struct{}, 1)
 			go func() {
-				<-waitChan
-				p.cond.Signal()
-				p.cond.L.Unlock()
+				p.cond.Wait()
+				waitChan <- struct{}{}
 			}()
 
-			return nil, ctx.Err()
-		case <-waitChan:
+			select {
+			case <-ctx.Done():
+				// Allow goroutine waiting for signal to exit. Re-signal since we couldn't
+				// do anything with it. Another goroutine might be waiting.
+				go func() {
+					<-waitChan
+					p.cond.Signal()
+					p.cond.L.Unlock()
+				}()
+
+				return nil, ctx.Err()
+			case <-waitChan:
+			}
 		}
-		// }
 	}
 }
 
