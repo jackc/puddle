@@ -455,6 +455,10 @@ func TestResourceDestroyRemovesResourceFromPool(t *testing.T) {
 
 	assert.Equal(t, 0, pool.Stat().TotalResources())
 	assert.Equal(t, 0, destructorCalls.Value())
+
+	// Can still call Value and CreationTime
+	res.Value()
+	res.CreationTime()
 }
 
 func TestResourceHijackRemovesResourceFromPoolButDoesNotDestroy(t *testing.T) {
@@ -468,6 +472,21 @@ func TestResourceHijackRemovesResourceFromPoolButDoesNotDestroy(t *testing.T) {
 	assert.Equal(t, 1, pool.Stat().TotalResources())
 	res.Destroy()
 	assert.Equal(t, 0, pool.Stat().TotalResources())
+}
+
+func TestResourcePanicsOnUsageWhenNotAcquired(t *testing.T) {
+	constructor, _ := createConstructor()
+	pool := puddle.NewPool(constructor, stubDestructor, 10)
+
+	res, err := pool.Acquire(context.Background())
+	require.NoError(t, err)
+	res.Release()
+
+	assert.PanicsWithValue(t, "tried to release resource that is not acquired", res.Release)
+	assert.PanicsWithValue(t, "tried to destroy resource that is not acquired", res.Destroy)
+	assert.PanicsWithValue(t, "tried to hijack resource that is not acquired", res.Hijack)
+	assert.PanicsWithValue(t, "tried to access resource that is not acquired or hijacked", func() { res.Value() })
+	assert.PanicsWithValue(t, "tried to access resource that is not acquired or hijacked", func() { res.CreationTime() })
 }
 
 func TestPoolAcquireReturnsErrorWhenPoolIsClosed(t *testing.T) {

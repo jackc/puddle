@@ -368,7 +368,7 @@ func removeResource(slice []*Resource, res *Resource) []*Resource {
 		}
 	}
 
-	return slice
+	panic("BUG: removeResource could not find res in slice")
 }
 
 func (p *Pool) constructResourceValue(ctx context.Context) (interface{}, error) {
