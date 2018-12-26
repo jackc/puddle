@@ -9,7 +9,7 @@ import (
 const (
 	resourceStatusCreating  = 0
 	resourceStatusAvailable = iota
-	resourceStatusBorrowed  = iota
+	resourceStatusAcquired  = iota
 	resourceStatusHijacked  = iota
 )
 
@@ -30,26 +30,26 @@ func (res *Resource) Value() interface{} {
 }
 
 func (res *Resource) Release() {
-	if res.status != resourceStatusBorrowed {
+	if res.status != resourceStatusAcquired {
 		panic("tried to release resource that is not acquired")
 	}
-	res.pool.releaseBorrowedResource(res)
+	res.pool.releaseAcquiredResource(res)
 }
 
 func (res *Resource) Destroy() {
-	if res.status != resourceStatusBorrowed {
+	if res.status != resourceStatusAcquired {
 		panic("tried to destroy resource that is not acquired")
 	}
-	res.pool.destroyBorrowedResource(res)
+	res.pool.destroyAcquiredResource(res)
 }
 
 // Hijack removes the resource from the pool without destroying it. Caller is
 // responsible for cleanup of resource value.
 func (res *Resource) Hijack() {
-	if res.status != resourceStatusBorrowed {
+	if res.status != resourceStatusAcquired {
 		panic("tried to hijack resource that is not acquired")
 	}
-	res.pool.hijackBorrowedResource(res)
+	res.pool.hijackAcquiredResource(res)
 }
 
 // Pool is a thread-safe resource pool.
@@ -155,7 +155,7 @@ func (p *Pool) Acquire(ctx context.Context) (*Resource, error) {
 			}
 
 			res.value = value
-			res.status = resourceStatusBorrowed
+			res.status = resourceStatusAcquired
 			p.cond.L.Unlock()
 			return res, nil
 		}
@@ -195,12 +195,12 @@ func (p *Pool) lockedAvailableAcquire() *Resource {
 	if rw.status != resourceStatusAvailable {
 		panic("BUG: unavailable resource gotten from availableResources")
 	}
-	rw.status = resourceStatusBorrowed
+	rw.status = resourceStatusAcquired
 	return rw
 }
 
-// releaseBorrowedResource returns res to the the pool.
-func (p *Pool) releaseBorrowedResource(res *Resource) {
+// releaseAcquiredResource returns res to the the pool.
+func (p *Pool) releaseAcquiredResource(res *Resource) {
 	p.cond.L.Lock()
 
 	if !p.closed {
@@ -217,7 +217,7 @@ func (p *Pool) releaseBorrowedResource(res *Resource) {
 
 // Remove removes res from the pool and closes it. If res is not part of the
 // pool Remove will panic.
-func (p *Pool) destroyBorrowedResource(res *Resource) {
+func (p *Pool) destroyAcquiredResource(res *Resource) {
 	p.cond.L.Lock()
 
 	p.allResources = removeResource(p.allResources, res)
@@ -227,7 +227,7 @@ func (p *Pool) destroyBorrowedResource(res *Resource) {
 	p.cond.Signal()
 }
 
-func (p *Pool) hijackBorrowedResource(res *Resource) {
+func (p *Pool) hijackAcquiredResource(res *Resource) {
 	p.cond.L.Lock()
 
 	p.allResources = removeResource(p.allResources, res)
