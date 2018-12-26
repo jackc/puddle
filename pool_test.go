@@ -80,18 +80,18 @@ func waitForRead(ch chan int) bool {
 	}
 }
 
-func TestPoolGetCreatesResourceWhenNoneAvailable(t *testing.T) {
+func TestPoolAcquireCreatesResourceWhenNoneAvailable(t *testing.T) {
 	createFunc, _ := createCreateResourceFunc()
 	pool := puddle.NewPool(createFunc, stubCloseRes)
 	defer pool.Close()
 
-	res, err := pool.Get(context.Background())
+	res, err := pool.Acquire(context.Background())
 	require.NoError(t, err)
 	assert.Equal(t, 1, res.Value())
 	res.Release()
 }
 
-func TestPoolGetDoesNotCreatesResourceWhenItWouldExceedMaxSize(t *testing.T) {
+func TestPoolAcquireDoesNotCreatesResourceWhenItWouldExceedMaxSize(t *testing.T) {
 	createFunc, createCounter := createCreateResourceFunc()
 	pool := puddle.NewPool(createFunc, stubCloseRes)
 	pool.SetMaxSize(1)
@@ -102,7 +102,7 @@ func TestPoolGetDoesNotCreatesResourceWhenItWouldExceedMaxSize(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			for j := 0; j < 100; j++ {
-				res, err := pool.Get(context.Background())
+				res, err := pool.Acquire(context.Background())
 				assert.NoError(t, err)
 				assert.Equal(t, 1, res.Value())
 				res.Release()
@@ -117,29 +117,29 @@ func TestPoolGetDoesNotCreatesResourceWhenItWouldExceedMaxSize(t *testing.T) {
 	assert.Equal(t, 1, pool.Size())
 }
 
-func TestPoolGetReturnsErrorFromFailedResourceCreate(t *testing.T) {
+func TestPoolAcquireReturnsErrorFromFailedResourceCreate(t *testing.T) {
 	errCreateFailed := errors.New("create failed")
 	createFunc := func(ctx context.Context) (interface{}, error) {
 		return nil, errCreateFailed
 	}
 	pool := puddle.NewPool(createFunc, stubCloseRes)
 
-	res, err := pool.Get(context.Background())
+	res, err := pool.Acquire(context.Background())
 	assert.Equal(t, errCreateFailed, err)
 	assert.Nil(t, res)
 }
 
-func TestPoolGetReusesResources(t *testing.T) {
+func TestPoolAcquireReusesResources(t *testing.T) {
 	createFunc, createCounter := createCreateResourceFunc()
 	pool := puddle.NewPool(createFunc, stubCloseRes)
 
-	res, err := pool.Get(context.Background())
+	res, err := pool.Acquire(context.Background())
 	require.NoError(t, err)
 	assert.Equal(t, 1, res.Value())
 
 	res.Release()
 
-	res, err = pool.Get(context.Background())
+	res, err = pool.Acquire(context.Background())
 	require.NoError(t, err)
 	assert.Equal(t, 1, res.Value())
 
@@ -148,7 +148,7 @@ func TestPoolGetReusesResources(t *testing.T) {
 	assert.Equal(t, 1, createCounter.Value())
 }
 
-func TestPoolGetContextAlreadyCanceled(t *testing.T) {
+func TestPoolAcquireContextAlreadyCanceled(t *testing.T) {
 	createFunc := func(ctx context.Context) (interface{}, error) {
 		panic("should never be called")
 	}
@@ -156,12 +156,12 @@ func TestPoolGetContextAlreadyCanceled(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	res, err := pool.Get(ctx)
+	res, err := pool.Acquire(ctx)
 	assert.Equal(t, context.Canceled, err)
 	assert.Nil(t, res)
 }
 
-func TestPoolGetContextCanceledDuringCreate(t *testing.T) {
+func TestPoolAcquireContextCanceledDuringCreate(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	time.AfterFunc(100*time.Millisecond, cancel)
 	timeoutChan := time.After(1 * time.Second)
@@ -177,7 +177,7 @@ func TestPoolGetContextCanceledDuringCreate(t *testing.T) {
 	}
 	pool := puddle.NewPool(createFunc, stubCloseRes)
 
-	res, err := pool.Get(ctx)
+	res, err := pool.Acquire(ctx)
 	assert.Equal(t, context.Canceled, err)
 	assert.Nil(t, res)
 }
@@ -188,7 +188,7 @@ func TestResourceReleaseClosesAndRemovesResourceIfOlderThanMaxDuration(t *testin
 
 	pool := puddle.NewPool(createFunc, closeFunc)
 
-	res, err := pool.Get(context.Background())
+	res, err := pool.Acquire(context.Background())
 	require.NoError(t, err)
 
 	assert.Equal(t, 1, pool.Size())
@@ -209,7 +209,7 @@ func TestResourceReleaseClosesAndRemovesResourceWhenResourceCheckoutCountIsMaxRe
 	pool := puddle.NewPool(createFunc, closeFunc)
 	pool.SetMaxResourceCheckouts(1)
 
-	res, err := pool.Get(context.Background())
+	res, err := pool.Acquire(context.Background())
 	require.NoError(t, err)
 
 	res.Release()
@@ -233,7 +233,7 @@ func TestPoolCloseClosesAllAvailableResources(t *testing.T) {
 	resources := make([]*puddle.Resource, 4)
 	for i := range resources {
 		var err error
-		resources[i], err = p.Get(context.Background())
+		resources[i], err = p.Acquire(context.Background())
 		require.Nil(t, err)
 	}
 
@@ -255,7 +255,7 @@ func TestPoolReleaseClosesResourcePoolIsAlreadyClosed(t *testing.T) {
 	resources := make([]*puddle.Resource, 4)
 	for i := range resources {
 		var err error
-		resources[i], err = p.Get(context.Background())
+		resources[i], err = p.Acquire(context.Background())
 		require.Nil(t, err)
 	}
 
@@ -278,7 +278,7 @@ func TestResourceDestroyRemovesResourceFromPool(t *testing.T) {
 	createFunc, _ := createCreateResourceFunc()
 	pool := puddle.NewPool(createFunc, stubCloseRes)
 
-	res, err := pool.Get(context.Background())
+	res, err := pool.Acquire(context.Background())
 	require.NoError(t, err)
 	assert.Equal(t, 1, res.Value())
 
@@ -287,17 +287,17 @@ func TestResourceDestroyRemovesResourceFromPool(t *testing.T) {
 	assert.Equal(t, 0, pool.Size())
 }
 
-func TestPoolGetReturnsErrorWhenPoolIsClosed(t *testing.T) {
+func TestPoolAcquireReturnsErrorWhenPoolIsClosed(t *testing.T) {
 	createFunc, _ := createCreateResourceFunc()
 	pool := puddle.NewPool(createFunc, stubCloseRes)
 	pool.Close()
 
-	res, err := pool.Get(context.Background())
+	res, err := pool.Acquire(context.Background())
 	assert.Equal(t, puddle.ErrClosedPool, err)
 	assert.Nil(t, res)
 }
 
-func BenchmarkPoolGetAndRelease(b *testing.B) {
+func BenchmarkPoolAcquireAndRelease(b *testing.B) {
 	benchmarks := []struct {
 		poolSize              int
 		concurrentClientCount int
@@ -341,8 +341,8 @@ func BenchmarkPoolGetAndRelease(b *testing.B) {
 		pool := puddle.NewPool(createFunc, stubCloseRes)
 		pool.SetMaxSize(bm.poolSize)
 
-		borrowAndRelease := func() {
-			res, err := pool.Get(context.Background())
+		acquireAndRelease := func() {
+			res, err := pool.Acquire(context.Background())
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -362,13 +362,13 @@ func BenchmarkPoolGetAndRelease(b *testing.B) {
 						default:
 						}
 
-						borrowAndRelease()
+						acquireAndRelease()
 					}
 				}()
 			}
 
 			for i := 0; i < b.N; i++ {
-				borrowAndRelease()
+				acquireAndRelease()
 			}
 		})
 	}

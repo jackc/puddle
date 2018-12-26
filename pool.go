@@ -71,7 +71,7 @@ func NewPool(createRes CreateFunc, closeRes CloseFunc) *Pool {
 	}
 }
 
-// Close closes all resources in the pool and rejects future Get calls.
+// Close closes all resources in the pool and rejects future Acquire calls.
 // Unavailable resources will be closes when they are returned to the pool.
 func (p *Pool) Close() {
 	p.cond.L.Lock()
@@ -169,11 +169,11 @@ func (p *Pool) SetMaxResourceCheckouts(n uint64) {
 	p.cond.L.Unlock()
 }
 
-// Get gets a resource from the pool. If no resources are available and the pool
+// Acquire gets a resource from the pool. If no resources are available and the pool
 // is not at maximum capacity it will create a new resource. If the pool is at
 // maximum capacity it will block until a resource is available. ctx can be used
-// to cancel the Get.
-func (p *Pool) Get(ctx context.Context) (*Resource, error) {
+// to cancel the Acquire.
+func (p *Pool) Acquire(ctx context.Context) (*Resource, error) {
 	if doneChan := ctx.Done(); doneChan != nil {
 		select {
 		case <-ctx.Done():
@@ -191,7 +191,7 @@ func (p *Pool) Get(ctx context.Context) (*Resource, error) {
 
 	// If a resource is available now
 	if len(p.availableResources) > 0 {
-		rw := p.lockedAvailableGet()
+		rw := p.lockedAvailableAcquire()
 		p.cond.L.Unlock()
 		return rw, nil
 	}
@@ -231,7 +231,7 @@ func (p *Pool) Get(ctx context.Context) (*Resource, error) {
 			p.cond.L.Unlock()
 			return
 		}
-		rw := p.lockedAvailableGet()
+		rw := p.lockedAvailableAcquire()
 		p.cond.L.Unlock()
 
 		select {
@@ -250,9 +250,9 @@ func (p *Pool) Get(ctx context.Context) (*Resource, error) {
 	}
 }
 
-// lockedAvailableGet gets the top resource from p.availableResources. p.cond.L
+// lockedAvailableAcquire gets the top resource from p.availableResources. p.cond.L
 // must already be locked. len(p.availableResources) must be > 0.
-func (p *Pool) lockedAvailableGet() *Resource {
+func (p *Pool) lockedAvailableAcquire() *Resource {
 	rw := p.availableResources[len(p.availableResources)-1]
 	p.availableResources = p.availableResources[:len(p.availableResources)-1]
 	if rw.status != resourceStatusAvailable {
