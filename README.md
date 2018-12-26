@@ -1,3 +1,4 @@
+[![](https://godoc.org/github.com/jackc/puddle?status.svg)](https://godoc.org/github.com/jackc/puddle)
 [![Build Status](https://travis-ci.org/jackc/puddle.svg)](https://travis-ci.org/jackc/puddle)
 
 # Puddle
@@ -11,10 +12,6 @@ Puddle is a tiny generic resource pool library for Go that uses the standard con
 * No dependencies outside of standard library
 * High performance
 * 100% test coverage
-
-## Documentation
-
-https://godoc.org/github.com/jackc/puddle
 
 ## License
 
