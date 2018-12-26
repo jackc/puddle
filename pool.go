@@ -64,7 +64,8 @@ type Pool struct {
 	destructor  Destructor
 	maxSize     int
 
-	acquireCount uint64
+	acquireCount     int64
+	slowAcquireCount int64
 
 	closed bool
 }
@@ -103,6 +104,8 @@ type Stat struct {
 	acquiredResources     int
 	idleResources         int
 	maxResources          int
+	acquireCount          int64
+	slowAcquireCount      int64
 }
 
 // TotalResource returns the total number of resources in the pool.
@@ -131,11 +134,24 @@ func (s *Stat) MaxResources() int {
 	return s.maxResources
 }
 
+// AcquireCount returns the number of successful acquires from the pool.
+func (s *Stat) AcquireCount() int64 {
+	return s.acquireCount
+}
+
+// SlowAcquireCount returns the number of successful acquires from the pool
+// that waited for a resource to be released or constructed.
+func (s *Stat) SlowAcquireCount() int64 {
+	return s.slowAcquireCount
+}
+
 // Stat returns the current pool statistics.
 func (p *Pool) Stat() *Stat {
 	p.cond.L.Lock()
 	s := &Stat{
-		maxResources: p.maxSize,
+		maxResources:     p.maxSize,
+		acquireCount:     p.acquireCount,
+		slowAcquireCount: p.slowAcquireCount,
 	}
 
 	for _, res := range p.allResources {
@@ -166,6 +182,7 @@ func (p *Pool) Acquire(ctx context.Context) (*Resource, error) {
 		}
 	}
 
+	slowAcquire := false
 	p.cond.L.Lock()
 
 	for {
@@ -176,10 +193,18 @@ func (p *Pool) Acquire(ctx context.Context) (*Resource, error) {
 
 		// If a resource is available now
 		if len(p.idleResources) > 0 {
-			rw := p.lockedIdleAcquire()
+			res := p.idleResources[len(p.idleResources)-1]
+			p.idleResources = p.idleResources[:len(p.idleResources)-1]
+			res.status = resourceStatusAcquired
+			p.acquireCount += 1
+			if slowAcquire {
+				p.slowAcquireCount += 1
+			}
 			p.cond.L.Unlock()
-			return rw, nil
+			return res, nil
 		}
+
+		slowAcquire = true
 
 		// If there is room to create a resource do so
 		if len(p.allResources) < p.maxSize {
@@ -199,6 +224,8 @@ func (p *Pool) Acquire(ctx context.Context) (*Resource, error) {
 
 			res.value = value
 			res.status = resourceStatusAcquired
+			p.acquireCount += 1
+			p.slowAcquireCount += 1
 			p.cond.L.Unlock()
 			return res, nil
 		}
@@ -228,18 +255,6 @@ func (p *Pool) Acquire(ctx context.Context) (*Resource, error) {
 			}
 		}
 	}
-}
-
-// lockedIdleAcquire gets the top resource from p.idleResources. p.cond.L
-// must already be locked. len(p.idleResources) must be > 0.
-func (p *Pool) lockedIdleAcquire() *Resource {
-	rw := p.idleResources[len(p.idleResources)-1]
-	p.idleResources = p.idleResources[:len(p.idleResources)-1]
-	if rw.status != resourceStatusIdle {
-		panic("BUG: non-idle resource gotten from idleResources")
-	}
-	rw.status = resourceStatusAcquired
-	return rw
 }
 
 // releaseAcquiredResource returns res to the the pool.

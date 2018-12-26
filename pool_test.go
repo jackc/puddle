@@ -261,7 +261,7 @@ func TestPoolCloseBlocksUntilAllResourcesReleasedAndClosed(t *testing.T) {
 	assert.Equal(t, len(resources), closeCalls.Value())
 }
 
-func TestPoolStat(t *testing.T) {
+func TestPoolStatResources(t *testing.T) {
 	startWaitChan := make(chan struct{})
 	waitingChan := make(chan struct{})
 	endWaitChan := make(chan struct{})
@@ -308,6 +308,46 @@ func TestPoolStat(t *testing.T) {
 	assert.Equal(t, 10, stat.MaxResources())
 
 	close(endWaitChan)
+}
+
+func TestPoolStatCounters(t *testing.T) {
+	createFunc, _ := createCreateResourceFunc()
+	pool := puddle.NewPool(createFunc, stubCloseRes, 1)
+	defer pool.Close()
+
+	res, err := pool.Acquire(context.Background())
+	require.NoError(t, err)
+	res.Release()
+
+	stat := pool.Stat()
+	assert.Equal(t, int64(1), stat.AcquireCount())
+	assert.Equal(t, int64(1), stat.SlowAcquireCount())
+
+	res, err = pool.Acquire(context.Background())
+	require.NoError(t, err)
+	res.Release()
+
+	stat = pool.Stat()
+	assert.Equal(t, int64(2), stat.AcquireCount())
+	assert.Equal(t, int64(1), stat.SlowAcquireCount())
+
+	wg := &sync.WaitGroup{}
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			res, err = pool.Acquire(context.Background())
+			require.NoError(t, err)
+			time.Sleep(50 * time.Millisecond)
+			res.Release()
+			wg.Done()
+		}()
+	}
+
+	wg.Wait()
+
+	stat = pool.Stat()
+	assert.Equal(t, int64(4), stat.AcquireCount())
+	assert.Equal(t, int64(2), stat.SlowAcquireCount())
 }
 
 func TestResourceDestroyRemovesResourceFromPool(t *testing.T) {
