@@ -299,77 +299,75 @@ func TestPoolAcquireReturnsErrorWhenPoolIsClosed(t *testing.T) {
 
 func BenchmarkPoolAcquireAndRelease(b *testing.B) {
 	benchmarks := []struct {
-		poolSize              int
-		concurrentClientCount int
-		loanDuration          time.Duration
+		poolSize    int
+		clientCount int
 	}{
-		// Small pool
-		{10, 1, 0},
-		{10, 5, 0},
-		{10, 10, 0},
-		{10, 20, 0},
-		{10, 1, 1 * time.Millisecond},
-		{10, 5, 1 * time.Millisecond},
-		{10, 10, 1 * time.Millisecond},
-		{10, 20, 1 * time.Millisecond},
+		{8, 1},
+		{8, 4},
+		{8, 8},
+		{8, 16},
+		{8, 32},
+		{8, 64},
+		{8, 64},
+		{8, 128},
+		{8, 256},
+		{8, 512},
+		{8, 1024},
+		{8, 2048},
 
-		// large pool
-		{100, 1, 0},
-		{100, 50, 0},
-		{100, 100, 0},
-		{100, 200, 0},
-		{100, 1, 1 * time.Millisecond},
-		{100, 50, 1 * time.Millisecond},
-		{100, 100, 1 * time.Millisecond},
-		{100, 200, 1 * time.Millisecond},
+		{64, 1},
+		{64, 4},
+		{64, 8},
+		{64, 16},
+		{64, 32},
+		{64, 64},
+		{64, 64},
+		{64, 128},
+		{64, 256},
+		{64, 512},
+		{64, 1024},
+		{64, 2048},
 
-		// huge pool
-		{1000, 1, 0},
-		{1000, 500, 0},
-		{1000, 1000, 0},
-		{1000, 2000, 0},
-		{1000, 1, 1 * time.Millisecond},
-		{1000, 500, 1 * time.Millisecond},
-		{1000, 1000, 1 * time.Millisecond},
-		{1000, 2000, 1 * time.Millisecond},
+		{512, 1},
+		{512, 4},
+		{512, 8},
+		{512, 16},
+		{512, 32},
+		{512, 64},
+		{512, 64},
+		{512, 128},
+		{512, 256},
+		{512, 512},
+		{512, 1024},
+		{512, 2048},
 	}
 
 	for _, bm := range benchmarks {
-		name := fmt.Sprintf("PoolSize=%d/ConcurrentClientCount=%d/LoanDuration=%v", bm.poolSize, bm.concurrentClientCount, bm.loanDuration)
-
-		createFunc, _ := createCreateResourceFunc()
-		pool := puddle.NewPool(createFunc, stubCloseRes)
-		pool.SetMaxSize(bm.poolSize)
-
-		acquireAndRelease := func() {
-			res, err := pool.Acquire(context.Background())
-			if err != nil {
-				b.Fatal(err)
-			}
-			time.Sleep(bm.loanDuration)
-			res.Release()
-		}
+		name := fmt.Sprintf("PoolSize=%d/ClientCount=%d", bm.poolSize, bm.clientCount)
 
 		b.Run(name, func(b *testing.B) {
-			doneChan := make(chan struct{})
-			defer close(doneChan)
-			for i := 0; i < bm.concurrentClientCount-1; i++ {
-				go func() {
-					for {
-						select {
-						case <-doneChan:
-							return
-						default:
-						}
+			wg := &sync.WaitGroup{}
 
-						acquireAndRelease()
+			createFunc, _ := createCreateResourceFunc()
+			pool := puddle.NewPool(createFunc, stubCloseRes)
+			pool.SetMaxSize(bm.poolSize)
+
+			for i := 0; i < bm.clientCount; i++ {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+
+					for j := 0; j < b.N; j++ {
+						res, err := pool.Acquire(context.Background())
+						if err != nil {
+							b.Fatal(err)
+						}
+						res.Release()
 					}
 				}()
 			}
 
-			for i := 0; i < b.N; i++ {
-				acquireAndRelease()
-			}
+			wg.Wait()
 		})
 	}
 }
