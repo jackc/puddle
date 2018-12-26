@@ -60,11 +60,13 @@ type Pool struct {
 	allResources  []*Resource
 	idleResources []*Resource
 
-	maxSize int
-	closed  bool
-
 	constructor Constructor
 	destructor  Destructor
+	maxSize     int
+
+	acquireCount uint64
+
+	closed bool
 }
 
 func NewPool(constructor Constructor, destructor Destructor, maxSize int) *Pool {
@@ -97,53 +99,53 @@ func (p *Pool) Close() {
 }
 
 type Stat struct {
-	constructing int
-	acquired     int
-	idle         int
-	maxSize      int
+	constructingResources int
+	acquiredResources     int
+	idleResources         int
+	maxResources          int
 }
 
-// Size returns the total number of resources in the pool.
-func (s *Stat) Size() int {
-	return s.constructing + s.acquired + s.idle
+// TotalResource returns the total number of resources in the pool.
+func (s *Stat) TotalResources() int {
+	return s.constructingResources + s.acquiredResources + s.idleResources
 }
 
-// Constructing returns the number of resources with construction in progress in
+// ConstructingResources returns the number of resources with construction in progress in
 // the pool.
-func (s *Stat) Constructing() int {
-	return s.constructing
+func (s *Stat) ConstructingResources() int {
+	return s.constructingResources
 }
 
-// Acquired returns the number of acquired resources in the pool.
-func (s *Stat) Acquired() int {
-	return s.acquired
+// AcquiredResources returns the number of acquired resources in the pool.
+func (s *Stat) AcquiredResources() int {
+	return s.acquiredResources
 }
 
-// Idle returns the number of idle resources in the pool.
-func (s *Stat) Idle() int {
-	return s.idle
+// IdleResources returns the number of idle resources in the pool.
+func (s *Stat) IdleResources() int {
+	return s.idleResources
 }
 
-// MaxSize returns the maximum size of the pool
-func (s *Stat) MaxSize() int {
-	return s.maxSize
+// MaxResources returns the maximum size of the pool
+func (s *Stat) MaxResources() int {
+	return s.maxResources
 }
 
 // Stat returns the current pool statistics.
 func (p *Pool) Stat() *Stat {
 	p.cond.L.Lock()
 	s := &Stat{
-		maxSize: p.maxSize,
+		maxResources: p.maxSize,
 	}
 
 	for _, res := range p.allResources {
 		switch res.status {
 		case resourceStatusConstructing:
-			s.constructing += 1
+			s.constructingResources += 1
 		case resourceStatusIdle:
-			s.idle += 1
+			s.idleResources += 1
 		case resourceStatusAcquired:
-			s.acquired += 1
+			s.acquiredResources += 1
 		}
 	}
 

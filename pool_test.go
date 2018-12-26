@@ -113,7 +113,7 @@ func TestPoolAcquireDoesNotCreatesResourceWhenItWouldExceedMaxSize(t *testing.T)
 	wg.Wait()
 
 	assert.Equal(t, 1, createCounter.Value())
-	assert.Equal(t, 1, pool.Stat().Size())
+	assert.Equal(t, 1, pool.Stat().TotalResources())
 }
 
 func TestPoolAcquireWithCancellableContext(t *testing.T) {
@@ -140,7 +140,7 @@ func TestPoolAcquireWithCancellableContext(t *testing.T) {
 	wg.Wait()
 
 	assert.Equal(t, 1, createCounter.Value())
-	assert.Equal(t, 1, pool.Stat().Size())
+	assert.Equal(t, 1, pool.Stat().TotalResources())
 }
 
 func TestPoolAcquireReturnsErrorFromFailedResourceCreate(t *testing.T) {
@@ -292,20 +292,20 @@ func TestPoolStat(t *testing.T) {
 	<-waitingChan
 	stat := pool.Stat()
 
-	assert.Equal(t, 2, stat.Size())
-	assert.Equal(t, 1, stat.Constructing())
-	assert.Equal(t, 1, stat.Acquired())
-	assert.Equal(t, 0, stat.Idle())
-	assert.Equal(t, 10, stat.MaxSize())
+	assert.Equal(t, 2, stat.TotalResources())
+	assert.Equal(t, 1, stat.ConstructingResources())
+	assert.Equal(t, 1, stat.AcquiredResources())
+	assert.Equal(t, 0, stat.IdleResources())
+	assert.Equal(t, 10, stat.MaxResources())
 
 	resAcquired.Release()
 
 	stat = pool.Stat()
-	assert.Equal(t, 2, stat.Size())
-	assert.Equal(t, 1, stat.Constructing())
-	assert.Equal(t, 0, stat.Acquired())
-	assert.Equal(t, 1, stat.Idle())
-	assert.Equal(t, 10, stat.MaxSize())
+	assert.Equal(t, 2, stat.TotalResources())
+	assert.Equal(t, 1, stat.ConstructingResources())
+	assert.Equal(t, 0, stat.AcquiredResources())
+	assert.Equal(t, 1, stat.IdleResources())
+	assert.Equal(t, 10, stat.MaxResources())
 
 	close(endWaitChan)
 }
@@ -325,7 +325,7 @@ func TestResourceDestroyRemovesResourceFromPool(t *testing.T) {
 
 	res.Hijack()
 
-	assert.Equal(t, 0, pool.Stat().Size())
+	assert.Equal(t, 0, pool.Stat().TotalResources())
 	assert.Equal(t, 0, closeCalls.Value())
 }
 
@@ -337,9 +337,9 @@ func TestResourceHijackRemovesResourceFromPoolButDoesNotDestroy(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, res.Value())
 
-	assert.Equal(t, 1, pool.Stat().Size())
+	assert.Equal(t, 1, pool.Stat().TotalResources())
 	res.Destroy()
-	assert.Equal(t, 0, pool.Stat().Size())
+	assert.Equal(t, 0, pool.Stat().TotalResources())
 }
 
 func TestPoolAcquireReturnsErrorWhenPoolIsClosed(t *testing.T) {
