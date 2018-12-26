@@ -9,3 +9,7 @@ Puddle is a tiny generic resource pool library for Go that uses the standard con
 * No dependencies outside of standard library
 * High performance
 * 100% test coverage
+
+## Documentation
+
+https://godoc.org/github.com/jackc/puddle
