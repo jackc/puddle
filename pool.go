@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"time"
 )
 
 const (
@@ -65,7 +66,8 @@ type Pool struct {
 	maxSize     int
 
 	acquireCount         int64
-	slowAcquireCount     int64
+	acquireDuration      time.Duration
+	emptyAcquireCount    int64
 	canceledAcquireCount int64
 
 	closed bool
@@ -106,7 +108,8 @@ type Stat struct {
 	idleResources         int
 	maxResources          int
 	acquireCount          int64
-	slowAcquireCount      int64
+	acquireDuration       time.Duration
+	emptyAcquireCount     int64
 	canceledAcquireCount  int64
 }
 
@@ -141,10 +144,17 @@ func (s *Stat) AcquireCount() int64 {
 	return s.acquireCount
 }
 
-// SlowAcquireCount returns the number of successful acquires from the pool
-// that waited for a resource to be released or constructed.
-func (s *Stat) SlowAcquireCount() int64 {
-	return s.slowAcquireCount
+// AcquireDuration returns the total duration of all successful acquires from
+// the pool.
+func (s *Stat) AcquireDuration() time.Duration {
+	return s.acquireDuration
+}
+
+// EmptyAcquireCount returns the number of successful acquires from the pool
+// that waited for a resource to be released or constructed because the pool was
+// empty.
+func (s *Stat) EmptyAcquireCount() int64 {
+	return s.emptyAcquireCount
 }
 
 // CanceledAcquireCount returns the number of acquires from the pool
@@ -159,8 +169,9 @@ func (p *Pool) Stat() *Stat {
 	s := &Stat{
 		maxResources:         p.maxSize,
 		acquireCount:         p.acquireCount,
-		slowAcquireCount:     p.slowAcquireCount,
+		emptyAcquireCount:    p.emptyAcquireCount,
 		canceledAcquireCount: p.canceledAcquireCount,
+		acquireDuration:      p.acquireDuration,
 	}
 
 	for _, res := range p.allResources {
@@ -183,6 +194,7 @@ func (p *Pool) Stat() *Stat {
 // maximum capacity it will block until a resource is available. ctx can be used
 // to cancel the Acquire.
 func (p *Pool) Acquire(ctx context.Context) (*Resource, error) {
+	startTime := time.Now()
 	p.cond.L.Lock()
 	if doneChan := ctx.Done(); doneChan != nil {
 		select {
@@ -194,7 +206,7 @@ func (p *Pool) Acquire(ctx context.Context) (*Resource, error) {
 		}
 	}
 
-	slowAcquire := false
+	emptyAcquire := false
 
 	for {
 		if p.closed {
@@ -207,15 +219,16 @@ func (p *Pool) Acquire(ctx context.Context) (*Resource, error) {
 			res := p.idleResources[len(p.idleResources)-1]
 			p.idleResources = p.idleResources[:len(p.idleResources)-1]
 			res.status = resourceStatusAcquired
-			p.acquireCount += 1
-			if slowAcquire {
-				p.slowAcquireCount += 1
+			if emptyAcquire {
+				p.emptyAcquireCount += 1
 			}
+			p.acquireCount += 1
+			p.acquireDuration += time.Now().Sub(startTime)
 			p.cond.L.Unlock()
 			return res, nil
 		}
 
-		slowAcquire = true
+		emptyAcquire = true
 
 		// If there is room to create a resource do so
 		if len(p.allResources) < p.maxSize {
@@ -244,8 +257,9 @@ func (p *Pool) Acquire(ctx context.Context) (*Resource, error) {
 
 			res.value = value
 			res.status = resourceStatusAcquired
+			p.emptyAcquireCount += 1
 			p.acquireCount += 1
-			p.slowAcquireCount += 1
+			p.acquireDuration += time.Now().Sub(startTime)
 			p.cond.L.Unlock()
 			return res, nil
 		}
