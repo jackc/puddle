@@ -183,12 +183,14 @@ func (p *Pool) Acquire(ctx context.Context) (*Resource, error) {
 		if len(p.allResources) < p.maxSize {
 			res := &Resource{pool: p, status: resourceStatusConstructing}
 			p.allResources = append(p.allResources, res)
+			p.destructWG.Add(1)
 			p.cond.L.Unlock()
 
 			value, err := p.constructResourceValue(ctx)
 			p.cond.L.Lock()
 			if err != nil {
 				p.allResources = removeResource(p.allResources, res)
+				p.destructWG.Done()
 				p.cond.L.Unlock()
 				return nil, err
 			}
@@ -289,12 +291,7 @@ func removeResource(slice []*Resource, res *Resource) []*Resource {
 }
 
 func (p *Pool) constructResourceValue(ctx context.Context) (interface{}, error) {
-	value, err := p.constructor(ctx)
-	if err != nil {
-		return nil, err
-	}
-	p.destructWG.Add(1)
-	return value, nil
+	return p.constructor(ctx)
 }
 
 func (p *Pool) destructResourceValue(value interface{}) {
