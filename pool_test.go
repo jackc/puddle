@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"math/rand"
+	"net"
 	"os"
 	"sync"
 	"testing"
@@ -587,6 +589,84 @@ func TestStress(t *testing.T) {
 	wg.Wait()
 
 	pool.Close()
+}
+
+func exampleDummyServer(laddr string, acceptCount int, recvCountChan chan int) {
+	ln, err := net.Listen("tcp", laddr)
+	if err != nil {
+		log.Fatalln("Listen:", err)
+	}
+
+	for i := 0; i < acceptCount; i++ {
+		conn, err := ln.Accept()
+		if err != nil {
+			log.Fatalln("Accept:", err)
+		}
+
+		go func() {
+			recvCount := 0
+			for {
+				buf := make([]byte, 1)
+				_, err := conn.Read(buf)
+				if err != nil {
+					recvCountChan <- recvCount
+					return
+				}
+				recvCount += 1
+			}
+		}()
+	}
+}
+
+func Example_Pool() {
+	// Dummy server
+	maxPoolSize := 4
+	serverRecvCountChan := make(chan int)
+	laddr := "127.0.0.1:8080"
+
+	// exampleDummyServer only listens maxPoolSize times so if the pool tried to
+	// connect more than that the pool would receive an error.
+	go exampleDummyServer(laddr, maxPoolSize, serverRecvCountChan)
+
+	// Pool usage
+	pool := puddle.NewPool(
+		func(context.Context) (interface{}, error) { return net.Dial("tcp", laddr) },
+		func(value interface{}) { value.(net.Conn).Close() },
+		maxPoolSize,
+	)
+
+	clientCount := 32
+	opPerClientCount := 100
+	wg := &sync.WaitGroup{}
+
+	for i := 0; i < clientCount; i++ {
+		wg.Add(1)
+		go func() {
+			for i := 0; i < opPerClientCount; i++ {
+				res, err := pool.Acquire(context.Background())
+				if err != nil {
+					log.Fatalln("Acquire", err)
+				}
+				_, err = res.Value().(net.Conn).Write([]byte{1})
+				if err != nil {
+					log.Fatalln("Write", err)
+				}
+				res.Release()
+			}
+			wg.Done()
+		}()
+	}
+
+	wg.Wait()
+	pool.Close()
+	totalRecv := <-serverRecvCountChan
+	totalRecv += <-serverRecvCountChan
+	totalRecv += <-serverRecvCountChan
+	totalRecv += <-serverRecvCountChan
+
+	fmt.Println("Ops:", totalRecv)
+	// Output:
+	// Ops: 3200
 }
 
 func BenchmarkPoolAcquireAndRelease(b *testing.B) {
