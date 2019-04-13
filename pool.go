@@ -84,7 +84,7 @@ type Pool struct {
 
 	constructor Constructor
 	destructor  Destructor
-	maxSize     int
+	maxSize     int32
 
 	acquireCount         int64
 	acquireDuration      time.Duration
@@ -95,7 +95,7 @@ type Pool struct {
 }
 
 // NewPool creates a new pool.
-func NewPool(constructor Constructor, destructor Destructor, maxSize int) *Pool {
+func NewPool(constructor Constructor, destructor Destructor, maxSize int32) *Pool {
 	return &Pool{
 		cond:        sync.NewCond(new(sync.Mutex)),
 		destructWG:  &sync.WaitGroup{},
@@ -126,10 +126,10 @@ func (p *Pool) Close() {
 
 // Stat is a snapshot of Pool statistics.
 type Stat struct {
-	constructingResources int
-	acquiredResources     int
-	idleResources         int
-	maxResources          int
+	constructingResources int32
+	acquiredResources     int32
+	idleResources         int32
+	maxResources          int32
 	acquireCount          int64
 	acquireDuration       time.Duration
 	emptyAcquireCount     int64
@@ -137,28 +137,28 @@ type Stat struct {
 }
 
 // TotalResource returns the total number of resources.
-func (s *Stat) TotalResources() int {
+func (s *Stat) TotalResources() int32 {
 	return s.constructingResources + s.acquiredResources + s.idleResources
 }
 
 // ConstructingResources returns the number of resources with construction in progress in
 // the pool.
-func (s *Stat) ConstructingResources() int {
+func (s *Stat) ConstructingResources() int32 {
 	return s.constructingResources
 }
 
 // AcquiredResources returns the number of acquired resources in the pool.
-func (s *Stat) AcquiredResources() int {
+func (s *Stat) AcquiredResources() int32 {
 	return s.acquiredResources
 }
 
 // IdleResources returns the number of idle resources in the pool.
-func (s *Stat) IdleResources() int {
+func (s *Stat) IdleResources() int32 {
 	return s.idleResources
 }
 
 // MaxResources returns the maximum size of the pool.
-func (s *Stat) MaxResources() int {
+func (s *Stat) MaxResources() int32 {
 	return s.maxResources
 }
 
@@ -254,7 +254,7 @@ func (p *Pool) Acquire(ctx context.Context) (*Resource, error) {
 		emptyAcquire = true
 
 		// If there is room to create a resource do so
-		if len(p.allResources) < p.maxSize {
+		if len(p.allResources) < int(p.maxSize) {
 			res := &Resource{pool: p, creationTime: startTime, status: resourceStatusConstructing}
 			p.allResources = append(p.allResources, res)
 			p.destructWG.Add(1)
