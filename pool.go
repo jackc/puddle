@@ -94,8 +94,12 @@ type Pool struct {
 	closed bool
 }
 
-// NewPool creates a new pool.
+// NewPool creates a new pool. Panics if maxSize is less than 1.
 func NewPool(constructor Constructor, destructor Destructor, maxSize int32) *Pool {
+	if maxSize < 1 {
+		panic("maxSize is less than 1")
+	}
+
 	return &Pool{
 		cond:        sync.NewCond(new(sync.Mutex)),
 		destructWG:  &sync.WaitGroup{},

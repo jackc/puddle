@@ -72,6 +72,12 @@ func waitForRead(ch chan int) bool {
 	}
 }
 
+func TestNewPoolRequiresMaxSizeGreaterThan0(t *testing.T) {
+	constructor, _ := createConstructor()
+	assert.Panics(t, func() { puddle.NewPool(constructor, stubDestructor, -1) })
+	assert.Panics(t, func() { puddle.NewPool(constructor, stubDestructor, 0) })
+}
+
 func TestPoolAcquireCreatesResourceWhenNoneIdle(t *testing.T) {
 	constructor, _ := createConstructor()
 	pool := puddle.NewPool(constructor, stubDestructor, 10)
