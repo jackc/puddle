@@ -679,6 +679,7 @@ func BenchmarkPoolAcquireAndRelease(b *testing.B) {
 		clientCount int
 		cancellable bool
 	}{
+		{8, 1, false},
 		{8, 2, false},
 		{8, 8, false},
 		{8, 32, false},
