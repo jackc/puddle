@@ -29,6 +29,7 @@ type Resource struct {
 	value        interface{}
 	pool         *Pool
 	creationTime time.Time
+	lastUsedTime time.Time
 	status       byte
 }
 
@@ -45,7 +46,16 @@ func (res *Resource) Release() {
 	if res.status != resourceStatusAcquired {
 		panic("tried to release resource that is not acquired")
 	}
-	res.pool.releaseAcquiredResource(res)
+	res.pool.releaseAcquiredResource(res, true)
+}
+
+// Release returns the resource to the pool after it was acquired via AcquireAllIdle.
+// It does not updates lastUsedTime. res must not be subsequently used.
+func (res *Resource) ReleaseIdle() {
+	if res.status != resourceStatusAcquired {
+		panic("tried to release resource that is not acquired")
+	}
+	res.pool.releaseAcquiredResource(res, false)
 }
 
 // Destroy returns the resource to the pool for destruction. res must not be
@@ -72,6 +82,15 @@ func (res *Resource) CreationTime() time.Time {
 		panic("tried to access resource that is not acquired or hijacked")
 	}
 	return res.creationTime
+}
+
+// LastUsedTime returns when the resource was last used, specifically when
+// it was released from a normal Acquire (not from an AcquireAllIdle)
+func (res *Resource) LastUsedTime() time.Time {
+	if !(res.status == resourceStatusAcquired || res.status == resourceStatusHijacked) {
+		panic("tried to access resource that is not acquired or hijacked")
+	}
+	return res.lastUsedTime
 }
 
 // Pool is a concurrency-safe resource pool.
@@ -339,10 +358,13 @@ func (p *Pool) AcquireAllIdle() []*Resource {
 }
 
 // releaseAcquiredResource returns res to the the pool.
-func (p *Pool) releaseAcquiredResource(res *Resource) {
+func (p *Pool) releaseAcquiredResource(res *Resource, updateLastUsed bool) {
 	p.cond.L.Lock()
 
 	if !p.closed {
+		if updateLastUsed {
+			res.lastUsedTime = time.Now()
+		}
 		res.status = resourceStatusIdle
 		p.idleResources = append(p.idleResources, res)
 	} else {
