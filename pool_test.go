@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"net"
 	"os"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -514,7 +515,12 @@ func TestStress(t *testing.T) {
 		destructorCalls.Next()
 	}
 
-	pool := puddle.NewPool(constructor, destructor, 10)
+	poolSize := runtime.NumCPU()
+	if poolSize < 4 {
+		poolSize = 4
+	}
+
+	pool := puddle.NewPool(constructor, destructor, int32(poolSize))
 
 	finishChan := make(chan struct{})
 	wg := &sync.WaitGroup{}
@@ -547,7 +553,7 @@ func TestStress(t *testing.T) {
 		},
 		// Acquire possibly canceled by context
 		func() {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Duration(rand.Int63n(200))*time.Millisecond)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Duration(rand.Int63n(2000))*time.Nanosecond)
 			defer cancel()
 			res, err := pool.Acquire(ctx)
 			if err != nil {
@@ -557,7 +563,7 @@ func TestStress(t *testing.T) {
 				return
 			}
 
-			time.Sleep(time.Duration(rand.Int63n(100)) * time.Millisecond)
+			time.Sleep(time.Duration(rand.Int63n(2000)) * time.Nanosecond)
 			releaseOrDestroyOrHijack(res)
 		},
 		// AcquireAllIdle (though under heavy load this will almost certainly always get an empty slice)
@@ -569,7 +575,9 @@ func TestStress(t *testing.T) {
 		},
 	}
 
-	for i := 0; i < 100; i++ {
+	workerCount := int(poolSize) * 2
+
+	for i := 0; i < workerCount; i++ {
 		wg.Add(1)
 		go func() {
 			for {

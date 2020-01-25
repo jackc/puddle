@@ -303,10 +303,6 @@ func (p *Pool) Acquire(ctx context.Context) (*Resource, error) {
 
 			select {
 			case <-ctx.Done():
-				p.cond.L.Lock()
-				p.canceledAcquireCount += 1
-				p.cond.L.Unlock()
-
 				// Allow goroutine waiting for signal to exit. Re-signal since we couldn't
 				// do anything with it. Another goroutine might be waiting.
 				go func() {
@@ -315,6 +311,9 @@ func (p *Pool) Acquire(ctx context.Context) (*Resource, error) {
 					p.cond.L.Unlock()
 				}()
 
+				p.cond.L.Lock()
+				p.canceledAcquireCount += 1
+				p.cond.L.Unlock()
 				return nil, ctx.Err()
 			case <-waitChan:
 			}
