@@ -46,7 +46,7 @@ func (res *Resource) Release() {
 	if res.status != resourceStatusAcquired {
 		panic("tried to release resource that is not acquired")
 	}
-	res.pool.releaseAcquiredResource(res, true)
+	res.pool.releaseAcquiredResource(res, time.Now())
 }
 
 // Release returns the resource to the pool after it was acquired via AcquireAllIdle.
@@ -55,7 +55,7 @@ func (res *Resource) ReleaseIdle() {
 	if res.status != resourceStatusAcquired {
 		panic("tried to release resource that is not acquired")
 	}
-	res.pool.releaseAcquiredResource(res, false)
+	res.pool.releaseAcquiredResource(res, res.lastUsedTime)
 }
 
 // Destroy returns the resource to the pool for destruction. res must not be
@@ -358,13 +358,11 @@ func (p *Pool) AcquireAllIdle() []*Resource {
 }
 
 // releaseAcquiredResource returns res to the the pool.
-func (p *Pool) releaseAcquiredResource(res *Resource, updateLastUsed bool) {
+func (p *Pool) releaseAcquiredResource(res *Resource, lastUsedTime time.Time) {
 	p.cond.L.Lock()
 
 	if !p.closed {
-		if updateLastUsed {
-			res.lastUsedTime = time.Now()
-		}
+		res.lastUsedTime = lastUsedTime
 		res.status = resourceStatusIdle
 		p.idleResources = append(p.idleResources, res)
 	} else {
