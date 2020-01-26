@@ -218,8 +218,6 @@ func TestPoolAcquireAllIdle(t *testing.T) {
 
 	resources[0], err = pool.Acquire(context.Background())
 	require.NoError(t, err)
-	assert.True(t, resources[0].LastUsedTime().IsZero(), "lastUsedTime should start as Zero")
-
 	resources[1], err = pool.Acquire(context.Background())
 	require.NoError(t, err)
 	resources[2], err = pool.Acquire(context.Background())
@@ -228,25 +226,23 @@ func TestPoolAcquireAllIdle(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Len(t, pool.AcquireAllIdle(), 0)
+
 	resources[0].Release()
 	resources[3].Release()
 
 	assert.ElementsMatch(t, []*puddle.Resource{resources[0], resources[3]}, pool.AcquireAllIdle())
-	r0LastUsedTime := resources[0].LastUsedTime()
-	assert.WithinDuration(t, time.Now(), r0LastUsedTime, time.Second, "should have updated lastUsedTime")
-	time.Sleep(1 * time.Millisecond) // sleep before releasing
-	resources[0].ReleaseIdle()
-	resources[3].ReleaseIdle()
 
+	resources[0].Release()
+	resources[3].Release()
 	resources[1].Release()
 	resources[2].Release()
 
 	assert.ElementsMatch(t, resources, pool.AcquireAllIdle())
-	assert.Equal(t, r0LastUsedTime, resources[0].LastUsedTime(), "should not have updated lastUsedTime")
-	resources[0].ReleaseIdle()
-	resources[1].ReleaseIdle()
-	resources[2].ReleaseIdle()
-	resources[3].ReleaseIdle()
+
+	resources[0].Release()
+	resources[1].Release()
+	resources[2].Release()
+	resources[3].Release()
 }
 
 func TestPoolCloseClosesAllIdleResources(t *testing.T) {
@@ -469,10 +465,10 @@ func TestResourceDestroyRemovesResourceFromPool(t *testing.T) {
 	assert.EqualValues(t, 0, pool.Stat().TotalResources())
 	assert.EqualValues(t, 0, destructorCalls.Value())
 
-	// Can still call Value, CreationTime and LastUsedTime
+	// Can still call Value, CreationTime and IdleDuration
 	res.Value()
 	res.CreationTime()
-	res.LastUsedTime()
+	res.IdleDuration()
 }
 
 func TestResourceHijackRemovesResourceFromPoolButDoesNotDestroy(t *testing.T) {
@@ -488,6 +484,43 @@ func TestResourceHijackRemovesResourceFromPoolButDoesNotDestroy(t *testing.T) {
 	assert.EqualValues(t, 0, pool.Stat().TotalResources())
 }
 
+func TestResourceLastUsageTimeTracking(t *testing.T) {
+	constructor, _ := createConstructor()
+	pool := puddle.NewPool(constructor, stubDestructor, 1)
+
+	// 0 before initial usage
+	res, err := pool.Acquire(context.Background())
+	require.NoError(t, err)
+	t1 := res.LastUsedNanotime()
+	d1 := res.IdleDuration()
+	assert.EqualValues(t, 0, t1)
+	assert.EqualValues(t, 0, d1)
+	res.Release()
+
+	// Greater than zero after initial usage
+	res, err = pool.Acquire(context.Background())
+	require.NoError(t, err)
+	t2 := res.LastUsedNanotime()
+	d2 := res.IdleDuration()
+	assert.True(t, t2 > 0)
+	assert.True(t, d2 > 0)
+	res.ReleaseUnused()
+
+	// ReleaseUnused does not update usage tracking
+	res, err = pool.Acquire(context.Background())
+	require.NoError(t, err)
+	t3 := res.LastUsedNanotime()
+	assert.EqualValues(t, t2, t3)
+	res.Release()
+
+	// Release does update usage tracking
+	res, err = pool.Acquire(context.Background())
+	require.NoError(t, err)
+	t4 := res.LastUsedNanotime()
+	assert.True(t, t4 > t3)
+	res.Release()
+}
+
 func TestResourcePanicsOnUsageWhenNotAcquired(t *testing.T) {
 	constructor, _ := createConstructor()
 	pool := puddle.NewPool(constructor, stubDestructor, 10)
@@ -497,12 +530,12 @@ func TestResourcePanicsOnUsageWhenNotAcquired(t *testing.T) {
 	res.Release()
 
 	assert.PanicsWithValue(t, "tried to release resource that is not acquired", res.Release)
-	assert.PanicsWithValue(t, "tried to release resource that is not acquired", res.ReleaseIdle)
+	assert.PanicsWithValue(t, "tried to release resource that is not acquired", res.ReleaseUnused)
 	assert.PanicsWithValue(t, "tried to destroy resource that is not acquired", res.Destroy)
 	assert.PanicsWithValue(t, "tried to hijack resource that is not acquired", res.Hijack)
 	assert.PanicsWithValue(t, "tried to access resource that is not acquired or hijacked", func() { res.Value() })
 	assert.PanicsWithValue(t, "tried to access resource that is not acquired or hijacked", func() { res.CreationTime() })
-	assert.PanicsWithValue(t, "tried to access resource that is not acquired or hijacked", func() { res.LastUsedTime() })
+	assert.PanicsWithValue(t, "tried to access resource that is not acquired or hijacked", func() { res.IdleDuration() })
 }
 
 func TestPoolAcquireReturnsErrorWhenPoolIsClosed(t *testing.T) {
