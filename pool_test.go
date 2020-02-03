@@ -245,6 +245,41 @@ func TestPoolAcquireAllIdle(t *testing.T) {
 	resources[3].Release()
 }
 
+func TestPoolCreateResource(t *testing.T) {
+	constructor, counter := createConstructor()
+	pool := puddle.NewPool(constructor, stubDestructor, 10)
+	defer pool.Close()
+
+	var err error
+
+	err = pool.CreateResource(context.Background())
+	require.NoError(t, err)
+
+	stats := pool.Stat()
+	assert.EqualValues(t, 1, stats.IdleResources())
+
+	res, err := pool.Acquire(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, counter.Value(), res.Value())
+	assert.True(t, res.LastUsedNanotime() > 0, "should set LastUsedNanotime so that idle calculations can still work")
+	assert.Equal(t, 1, res.Value())
+	assert.WithinDuration(t, time.Now(), res.CreationTime(), time.Second)
+	res.Release()
+
+	assert.EqualValues(t, 0, pool.Stat().EmptyAcquireCount(), "should have been a warm resource")
+}
+
+func TestPoolCreateResourceReturnsErrorFromFailedResourceCreate(t *testing.T) {
+	errCreateFailed := errors.New("create failed")
+	constructor := func(ctx context.Context) (interface{}, error) {
+		return nil, errCreateFailed
+	}
+	pool := puddle.NewPool(constructor, stubDestructor, 10)
+
+	err := pool.CreateResource(context.Background())
+	assert.Equal(t, errCreateFailed, err)
+}
+
 func TestPoolCloseClosesAllIdleResources(t *testing.T) {
 	constructor, _ := createConstructor()
 
@@ -535,6 +570,7 @@ func TestResourcePanicsOnUsageWhenNotAcquired(t *testing.T) {
 	assert.PanicsWithValue(t, "tried to hijack resource that is not acquired", res.Hijack)
 	assert.PanicsWithValue(t, "tried to access resource that is not acquired or hijacked", func() { res.Value() })
 	assert.PanicsWithValue(t, "tried to access resource that is not acquired or hijacked", func() { res.CreationTime() })
+	assert.PanicsWithValue(t, "tried to access resource that is not acquired or hijacked", func() { res.LastUsedNanotime() })
 	assert.PanicsWithValue(t, "tried to access resource that is not acquired or hijacked", func() { res.IdleDuration() })
 }
 
