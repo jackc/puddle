@@ -373,6 +373,32 @@ func (p *Pool) AcquireAllIdle() []*Resource {
 	return resources
 }
 
+// CreateResource constructs a new resource without acquiring it.
+// It goes straight in the IdlePool. It does not check against maxSize.
+// It can be useful to maintain warm resources under little load.
+func (p *Pool) CreateResource(ctx context.Context) error {
+
+	value, err := p.constructResourceValue(ctx)
+	if err != nil {
+		return err
+	}
+
+	res := &Resource{
+		pool:         p,
+		creationTime: time.Now(),
+		status:       resourceStatusIdle,
+		value:        value,
+	}
+
+	p.cond.L.Lock()
+	p.allResources = append(p.allResources, res)
+	p.idleResources = append(p.idleResources, res)
+	p.destructWG.Add(1)
+	p.cond.L.Unlock()
+
+	return nil
+}
+
 // releaseAcquiredResource returns res to the the pool.
 func (p *Pool) releaseAcquiredResource(res *Resource, lastUsedNano int64) {
 	p.cond.L.Lock()

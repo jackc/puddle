@@ -245,6 +245,44 @@ func TestPoolAcquireAllIdle(t *testing.T) {
 	resources[3].Release()
 }
 
+func TestPoolCreateResource(t *testing.T) {
+	constructor, counter := createConstructor()
+	pool := puddle.NewPool(constructor, stubDestructor, 10)
+	defer pool.Close()
+
+	var err error
+
+	err = pool.CreateResource(context.Background())
+	require.NoError(t, err)
+
+	allIdle := pool.AcquireAllIdle()
+	assert.Equal(t, counter.Value(), allIdle[0].Value())
+	allIdle[0].ReleaseUnused()
+
+	stats := pool.Stat()
+	assert.EqualValues(t, 1, stats.IdleResources())
+
+	res, err := pool.Acquire(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 1, res.Value())
+	assert.WithinDuration(t, time.Now(), res.CreationTime(), time.Second)
+	res.Release()
+
+	stats = pool.Stat()
+	assert.EqualValues(t, 0, stats.EmptyAcquireCount())
+}
+
+func TestPoolCreateResourceReturnsErrorFromFailedResourceCreate(t *testing.T) {
+	errCreateFailed := errors.New("create failed")
+	constructor := func(ctx context.Context) (interface{}, error) {
+		return nil, errCreateFailed
+	}
+	pool := puddle.NewPool(constructor, stubDestructor, 10)
+
+	err := pool.CreateResource(context.Background())
+	assert.Equal(t, errCreateFailed, err)
+}
+
 func TestPoolCloseClosesAllIdleResources(t *testing.T) {
 	constructor, _ := createConstructor()
 
