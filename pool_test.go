@@ -573,6 +573,7 @@ func TestResourcePanicsOnUsageWhenNotAcquired(t *testing.T) {
 	assert.PanicsWithValue(t, "tried to hijack resource that is not acquired", res.Hijack)
 	assert.PanicsWithValue(t, "tried to access resource that is not acquired or hijacked", func() { res.Value() })
 	assert.PanicsWithValue(t, "tried to access resource that is not acquired or hijacked", func() { res.CreationTime() })
+	assert.PanicsWithValue(t, "tried to access resource that is not acquired or hijacked", func() { res.LastUsedNanotime() })
 	assert.PanicsWithValue(t, "tried to access resource that is not acquired or hijacked", func() { res.IdleDuration() })
 }
 
