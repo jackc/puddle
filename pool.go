@@ -84,9 +84,9 @@ func (res *Resource) CreationTime() time.Time {
 	return res.creationTime
 }
 
-// LastUsedNanotime returns when Release was last called on the resource measured in nanoseconds from an arbitrary
-// time (a monotonic time). Returns 0 is Release as never been called. This is only useful to compare with other
-// calls to LastUsedNanotime. In almost all cases, IdleDuration should be used instead.
+// LastUsedNanotime returns when Release was last called on the resource measured in nanoseconds from an arbitrary time
+// (a monotonic time). Returns creation time if Release has never been called. This is only useful to compare with
+// other calls to LastUsedNanotime. In almost all cases, IdleDuration should be used instead.
 func (res *Resource) LastUsedNanotime() int64 {
 	if !(res.status == resourceStatusAcquired || res.status == resourceStatusHijacked) {
 		panic("tried to access resource that is not acquired or hijacked")
@@ -95,15 +95,11 @@ func (res *Resource) LastUsedNanotime() int64 {
 	return res.lastUsedNano
 }
 
-// IdleDuration returns the duration since Release was last called on the resource. If Release has never been called
-// a zero duration will be returned. This is equivalent to subtracting LastUsedNanotime to the current nanotime.
+// IdleDuration returns the duration since Release was last called on the resource. This is equivalent to subtracting
+// LastUsedNanotime to the current nanotime.
 func (res *Resource) IdleDuration() time.Duration {
 	if !(res.status == resourceStatusAcquired || res.status == resourceStatusHijacked) {
 		panic("tried to access resource that is not acquired or hijacked")
-	}
-
-	if res.lastUsedNano == 0 {
-		return time.Duration(0)
 	}
 
 	return time.Duration(nanotime() - res.lastUsedNano)
@@ -294,7 +290,7 @@ func (p *Pool) Acquire(ctx context.Context) (*Resource, error) {
 
 		// If there is room to create a resource do so
 		if len(p.allResources) < int(p.maxSize) {
-			res := &Resource{pool: p, creationTime: time.Now(), status: resourceStatusConstructing}
+			res := &Resource{pool: p, creationTime: time.Now(), lastUsedNano: nanotime(), status: resourceStatusConstructing}
 			p.allResources = append(p.allResources, res)
 			p.destructWG.Add(1)
 			p.cond.L.Unlock()

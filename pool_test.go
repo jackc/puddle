@@ -523,13 +523,9 @@ func TestResourceLastUsageTimeTracking(t *testing.T) {
 	constructor, _ := createConstructor()
 	pool := puddle.NewPool(constructor, stubDestructor, 1)
 
-	// 0 before initial usage
 	res, err := pool.Acquire(context.Background())
 	require.NoError(t, err)
 	t1 := res.LastUsedNanotime()
-	d1 := res.IdleDuration()
-	assert.EqualValues(t, 0, t1)
-	assert.EqualValues(t, 0, d1)
 	res.Release()
 
 	// Greater than zero after initial usage
@@ -537,15 +533,16 @@ func TestResourceLastUsageTimeTracking(t *testing.T) {
 	require.NoError(t, err)
 	t2 := res.LastUsedNanotime()
 	d2 := res.IdleDuration()
-	assert.True(t, t2 > 0)
-	assert.True(t, d2 > 0)
+	assert.True(t, t2 > t1)
 	res.ReleaseUnused()
 
 	// ReleaseUnused does not update usage tracking
 	res, err = pool.Acquire(context.Background())
 	require.NoError(t, err)
 	t3 := res.LastUsedNanotime()
+	d3 := res.IdleDuration()
 	assert.EqualValues(t, t2, t3)
+	assert.True(t, d3 > d2)
 	res.Release()
 
 	// Release does update usage tracking
