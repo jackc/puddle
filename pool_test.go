@@ -255,21 +255,18 @@ func TestPoolCreateResource(t *testing.T) {
 	err = pool.CreateResource(context.Background())
 	require.NoError(t, err)
 
-	allIdle := pool.AcquireAllIdle()
-	assert.Equal(t, counter.Value(), allIdle[0].Value())
-	allIdle[0].ReleaseUnused()
-
 	stats := pool.Stat()
 	assert.EqualValues(t, 1, stats.IdleResources())
 
 	res, err := pool.Acquire(context.Background())
 	require.NoError(t, err)
+	assert.Equal(t, counter.Value(), res.Value())
+	assert.True(t, res.LastUsedNanotime() > 0, "should set LastUsedNanotime so that idle calculations can still work")
 	assert.Equal(t, 1, res.Value())
 	assert.WithinDuration(t, time.Now(), res.CreationTime(), time.Second)
 	res.Release()
 
-	stats = pool.Stat()
-	assert.EqualValues(t, 0, stats.EmptyAcquireCount())
+	assert.EqualValues(t, 0, pool.Stat().EmptyAcquireCount(), "should have been a warm resource")
 }
 
 func TestPoolCreateResourceReturnsErrorFromFailedResourceCreate(t *testing.T) {

@@ -388,6 +388,7 @@ func (p *Pool) CreateResource(ctx context.Context) error {
 		creationTime: time.Now(),
 		status:       resourceStatusIdle,
 		value:        value,
+		lastUsedNano: nanotime(),
 	}
 
 	p.cond.L.Lock()
