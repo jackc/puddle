@@ -361,6 +361,10 @@ func (p *Pool) Acquire(ctx context.Context) (*Resource, error) {
 // statistics.
 func (p *Pool) AcquireAllIdle() []*Resource {
 	p.cond.L.Lock()
+	if p.closed {
+		p.cond.L.Unlock()
+		return nil
+	}
 
 	for _, res := range p.idleResources {
 		res.status = resourceStatusAcquired
