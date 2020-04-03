@@ -402,6 +402,11 @@ func (p *Pool) CreateResource(ctx context.Context) error {
 	}
 
 	p.cond.L.Lock()
+	// If closed while constructing resource then destroy it and return an error
+	if p.closed {
+		go p.destructResourceValue(res.value)
+		return ErrClosedPool
+	}
 	p.allResources = append(p.allResources, res)
 	p.idleResources = append(p.idleResources, res)
 	p.destructWG.Add(1)
