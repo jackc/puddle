@@ -381,6 +381,12 @@ func (p *Pool) AcquireAllIdle() []*Resource {
 // It goes straight in the IdlePool. It does not check against maxSize.
 // It can be useful to maintain warm resources under little load.
 func (p *Pool) CreateResource(ctx context.Context) error {
+	p.cond.L.Lock()
+	if p.closed {
+		p.cond.L.Unlock()
+		return ErrClosedPool
+	}
+	p.cond.L.Unlock()
 
 	value, err := p.constructResourceValue(ctx)
 	if err != nil {
