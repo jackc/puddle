@@ -144,6 +144,10 @@ func NewPool(constructor Constructor, destructor Destructor, maxSize int32) *Poo
 // Blocks until all resources are returned to pool and destroyed.
 func (p *Pool) Close() {
 	p.cond.L.Lock()
+	if p.closed {
+		p.cond.L.Unlock()
+		return
+	}
 	p.closed = true
 
 	for _, res := range p.idleResources {
