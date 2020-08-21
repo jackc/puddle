@@ -400,6 +400,7 @@ func (p *Pool) CreateResource(ctx context.Context) error {
 		value:        value,
 		lastUsedNano: nanotime(),
 	}
+	p.destructWG.Add(1)
 
 	p.cond.L.Lock()
 	// If closed while constructing resource then destroy it and return an error
@@ -409,7 +410,6 @@ func (p *Pool) CreateResource(ctx context.Context) error {
 	}
 	p.allResources = append(p.allResources, res)
 	p.idleResources = append(p.idleResources, res)
-	p.destructWG.Add(1)
 	p.cond.L.Unlock()
 
 	return nil

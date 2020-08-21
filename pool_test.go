@@ -245,6 +245,13 @@ func TestPoolAcquireAllIdle(t *testing.T) {
 	resources[3].Release()
 }
 
+func TestPoolAcquireAllIdleWhenClosedIsNil(t *testing.T) {
+	constructor, _ := createConstructor()
+	pool := puddle.NewPool(constructor, stubDestructor, 10)
+	pool.Close()
+	assert.Nil(t, pool.AcquireAllIdle())
+}
+
 func TestPoolCreateResource(t *testing.T) {
 	constructor, counter := createConstructor()
 	pool := puddle.NewPool(constructor, stubDestructor, 10)
@@ -278,6 +285,36 @@ func TestPoolCreateResourceReturnsErrorFromFailedResourceCreate(t *testing.T) {
 
 	err := pool.CreateResource(context.Background())
 	assert.Equal(t, errCreateFailed, err)
+}
+
+func TestPoolCreateResourceReturnsErrorWhenAlreadyClosed(t *testing.T) {
+	constructor, _ := createConstructor()
+	pool := puddle.NewPool(constructor, stubDestructor, 10)
+	pool.Close()
+	err := pool.CreateResource(context.Background())
+	assert.Equal(t, puddle.ErrClosedPool, err)
+}
+
+func TestPoolCreateResourceReturnsErrorWhenClosedWhileCreatingResource(t *testing.T) {
+	// There is no way to guarantee the correct order of the pool being closed while the resource is being constructed.
+	// But these sleeps should make it extremely likely. (Ah, the lengths we go for 100% test coverage...)
+	constructor := func(ctx context.Context) (interface{}, error) {
+		time.Sleep(500 * time.Millisecond)
+		return "abc", nil
+	}
+	pool := puddle.NewPool(constructor, stubDestructor, 10)
+
+	acquireErrChan := make(chan error)
+	go func() {
+		err := pool.CreateResource(context.Background())
+		acquireErrChan <- err
+	}()
+
+	time.Sleep(250 * time.Millisecond)
+	pool.Close()
+
+	err := <-acquireErrChan
+	assert.Equal(t, puddle.ErrClosedPool, err)
 }
 
 func TestPoolCloseClosesAllIdleResources(t *testing.T) {
@@ -331,6 +368,15 @@ func TestPoolCloseBlocksUntilAllResourcesReleasedAndClosed(t *testing.T) {
 
 	p.Close()
 	assert.Equal(t, len(resources), destructorCalls.Value())
+}
+
+func TestPoolCloseIsSafeToCallMultipleTimes(t *testing.T) {
+	constructor, _ := createConstructor()
+
+	p := puddle.NewPool(constructor, stubDestructor, 10)
+
+	p.Close()
+	p.Close()
 }
 
 func TestPoolStatResources(t *testing.T) {
