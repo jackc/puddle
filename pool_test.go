@@ -482,7 +482,7 @@ func TestPoolStatCanceledAcquireDuringWait(t *testing.T) {
 	assert.Equal(t, int64(1), stat.CanceledAcquireCount())
 }
 
-func TestResourceDestroyRemovesResourceFromPool(t *testing.T) {
+func TestResourceHijackRemovesResourceFromPoolButDoesNotDestroy(t *testing.T) {
 	constructor, _ := createConstructor()
 	var destructorCalls Counter
 	destructor := func(interface{}) {
@@ -506,7 +506,7 @@ func TestResourceDestroyRemovesResourceFromPool(t *testing.T) {
 	res.IdleDuration()
 }
 
-func TestResourceHijackRemovesResourceFromPoolButDoesNotDestroy(t *testing.T) {
+func TestResourceDestroyRemovesResourceFromPool(t *testing.T) {
 	constructor, _ := createConstructor()
 	pool := puddle.NewPool(constructor, stubDestructor, 10)
 
@@ -516,6 +516,13 @@ func TestResourceHijackRemovesResourceFromPoolButDoesNotDestroy(t *testing.T) {
 
 	assert.EqualValues(t, 1, pool.Stat().TotalResources())
 	res.Destroy()
+	for i := 0; i < 1000; i++ {
+		if pool.Stat().TotalResources() == 0 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+
 	assert.EqualValues(t, 0, pool.Stat().TotalResources())
 }
 
