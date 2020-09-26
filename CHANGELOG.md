@@ -1,4 +1,4 @@
-# Unreleased
+# 1.1.2 (September 26, 2020)
 
 * Fix: Resource.Destroy no longer removes itself from the pool before its destructor has completed.
 * Fix: Prevent crash when pool is closed while resource is being created.
