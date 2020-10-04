@@ -175,8 +175,9 @@ type Stat struct {
 	canceledAcquireCount  int64
 }
 
-// TotalResource returns the total number of allocated resources in the pool.
-// The value is the sum of ConstructingResources, AcquiredResources, and IdleResources.
+// TotalResource returns the total number of resources currently in the pool.
+// The value is the sum of ConstructingResources, AcquiredResources, and
+// IdleResources.
 func (s *Stat) TotalResources() int32 {
 	return s.constructingResources + s.acquiredResources + s.idleResources
 }
