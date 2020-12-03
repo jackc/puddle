@@ -316,6 +316,7 @@ func (p *Pool) Acquire(ctx context.Context) (*Resource, error) {
 				}
 
 				p.cond.L.Unlock()
+				p.cond.Signal()
 				return nil, err
 			}
 

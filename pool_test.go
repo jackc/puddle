@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"runtime"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -632,6 +633,36 @@ func TestPoolAcquireReturnsErrorWhenPoolIsClosed(t *testing.T) {
 	res, err := pool.Acquire(context.Background())
 	assert.Equal(t, puddle.ErrClosedPool, err)
 	assert.Nil(t, res)
+}
+
+func TestSignalIsSentWhenResourceFailedToCreate(t *testing.T) {
+	var c Counter
+	constructor := func(context.Context) (a interface{}, err error) {
+		if c.Next() == 2 {
+			return nil, errors.New("outage")
+		}
+		return 1, nil
+	}
+	destructor := func(value interface{}) {}
+
+	pool := puddle.NewPool(constructor, destructor, 1)
+
+	res1, err := pool.Acquire(context.Background())
+	require.NoError(t, err)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func(name string) {
+			defer wg.Done()
+			_, _ = pool.Acquire(context.Background())
+		}(strconv.Itoa(i))
+	}
+
+	// ensure that both goroutines above are waiting for condition variable signal
+	time.Sleep(500 * time.Millisecond)
+	res1.Destroy()
+	wg.Wait()
 }
 
 func TestStress(t *testing.T) {
