@@ -1,3 +1,7 @@
+# 1.1.4 (September 11, 2021)
+
+* Fix: Deadlock in CreateResource if pool was closed during resource acquisition (Dmitriy Matrenichev)
+
 # 1.1.3 (December 3, 2020)
 
 * Fix: Failed resource creation could cause concurrent Acquire to hang. (Evgeny Vanslov)
