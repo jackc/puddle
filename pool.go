@@ -18,6 +18,10 @@ const (
 // or a pool that is closed while the acquire is waiting.
 var ErrClosedPool = errors.New("closed pool")
 
+// ErrNotAvailable occurs on an attempt to acquire a resource from a pool
+// that is at maximum capacity and has no available resources.
+var ErrNotAvailable = errors.New("resource not available")
+
 // Constructor is a function called by the pool to construct a resource.
 type Constructor func(ctx context.Context) (res interface{}, err error)
 
@@ -258,6 +262,19 @@ func (p *Pool) Stat() *Stat {
 // maximum capacity it will block until a resource is available. ctx can be used
 // to cancel the Acquire.
 func (p *Pool) Acquire(ctx context.Context) (*Resource, error) {
+	return p.doAcquire(ctx, true)
+}
+
+// TryAcquire gets a resource from the pool. TryAcquire is the same as Acquire except
+// it returns ErrNotAvailable if the pool is at maximum capacity and no resources are available.
+func (p *Pool) TryAcquire(ctx context.Context) (*Resource, error) {
+	return p.doAcquire(ctx, false)
+}
+
+// doAcquire implements shared logic behind Acquire and TryAcquire. If block is true
+// doAcquire will block until a resource becomes available. If block is false, doAcquire
+// will return ErrNotAvailable if no resource is available.
+func (p *Pool) doAcquire(ctx context.Context, block bool) (*Resource, error) {
 	startNano := nanotime()
 	p.cond.L.Lock()
 	if doneChan := ctx.Done(); doneChan != nil {
@@ -327,6 +344,10 @@ func (p *Pool) Acquire(ctx context.Context) (*Resource, error) {
 			p.acquireDuration += time.Duration(nanotime() - startNano)
 			p.cond.L.Unlock()
 			return res, nil
+		} else if !block {
+			// If the pool is at maximum capacity and we're not blocking
+			p.cond.L.Unlock()
+			return nil, ErrNotAvailable
 		}
 
 		if ctx.Done() == nil {
