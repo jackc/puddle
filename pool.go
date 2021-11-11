@@ -298,6 +298,7 @@ func (p *Pool) doAcquire(ctx context.Context, block bool) (*Resource, error) {
 		// If a resource is available now
 		if len(p.idleResources) > 0 {
 			res := p.idleResources[len(p.idleResources)-1]
+			p.idleResources[len(p.idleResources)-1] = nil // Avoid memory leak
 			p.idleResources = p.idleResources[:len(p.idleResources)-1]
 			res.status = resourceStatusAcquired
 			if emptyAcquire {
@@ -393,9 +394,8 @@ func (p *Pool) AcquireAllIdle() []*Resource {
 	for _, res := range p.idleResources {
 		res.status = resourceStatusAcquired
 	}
-	resources := make([]*Resource, len(p.idleResources))
-	copy(resources, p.idleResources)
-	p.idleResources = p.idleResources[0:0]
+	resources := p.idleResources // Swap out current slice
+	p.idleResources = nil
 
 	p.cond.L.Unlock()
 	return resources
@@ -482,6 +482,7 @@ func removeResource(slice []*Resource, res *Resource) []*Resource {
 	for i := range slice {
 		if slice[i] == res {
 			slice[i] = slice[len(slice)-1]
+			slice[len(slice)-1] = nil // Avoid memory leak
 			return slice[:len(slice)-1]
 		}
 	}
