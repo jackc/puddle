@@ -192,6 +192,20 @@ func TestPoolTryAcquireDoesNotBlock(t *testing.T) {
 	assert.Equal(t, 1, createCounter.Value())
 }
 
+func TestPoolAcquireNilContextDoesNotLeavePoolLocked(t *testing.T) {
+	constructor, createCounter := createConstructor()
+	pool := puddle.NewPool(constructor, stubDestructor, 10)
+
+	assert.Panics(t, func() { pool.Acquire(nil) })
+
+	res, err := pool.Acquire(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 1, res.Value())
+	res.Release()
+
+	assert.Equal(t, 1, createCounter.Value())
+}
+
 func TestPoolAcquireContextAlreadyCanceled(t *testing.T) {
 	constructor := func(ctx context.Context) (interface{}, error) {
 		panic("should never be called")

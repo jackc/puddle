@@ -276,16 +276,18 @@ func (p *Pool) TryAcquire(ctx context.Context) (*Resource, error) {
 // will return ErrNotAvailable if no resource is available.
 func (p *Pool) doAcquire(ctx context.Context, block bool) (*Resource, error) {
 	startNano := nanotime()
-	p.cond.L.Lock()
 	if doneChan := ctx.Done(); doneChan != nil {
 		select {
 		case <-ctx.Done():
+			p.cond.L.Lock()
 			p.canceledAcquireCount += 1
 			p.cond.L.Unlock()
 			return nil, ctx.Err()
 		default:
 		}
 	}
+
+	p.cond.L.Lock()
 
 	emptyAcquire := false
 
