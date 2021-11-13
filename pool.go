@@ -275,6 +275,9 @@ func (p *Pool) TryAcquire(ctx context.Context) (*Resource, error) {
 // doAcquire will block until a resource becomes available. If block is false, doAcquire
 // will return ErrNotAvailable if no resource is available.
 func (p *Pool) doAcquire(ctx context.Context, block bool) (*Resource, error) {
+	if ctx == nil {
+		panic("tried to acquire connection with nil context")
+	}
 	startNano := nanotime()
 	p.cond.L.Lock()
 	if doneChan := ctx.Done(); doneChan != nil {

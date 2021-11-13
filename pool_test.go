@@ -226,6 +226,15 @@ func TestPoolAcquireContextCanceledDuringCreate(t *testing.T) {
 	assert.Nil(t, res)
 }
 
+func TestPoolAcquireContextNilPanics(t *testing.T) {
+	constructor := func(ctx context.Context) (interface{}, error) {
+		panic("should never be called")
+	}
+	pool := puddle.NewPool(constructor, stubDestructor, 10)
+
+	assert.PanicsWithValue(t, "tried to acquire connection with nil context", func() { pool.Acquire(nil) })
+}
+
 func TestPoolAcquireAllIdle(t *testing.T) {
 	constructor, _ := createConstructor()
 	pool := puddle.NewPool(constructor, stubDestructor, 10)
