@@ -265,10 +265,30 @@ func (p *Pool) Acquire(ctx context.Context) (*Resource, error) {
 	return p.doAcquire(ctx, true)
 }
 
-// TryAcquire gets a resource from the pool. TryAcquire is the same as Acquire except
-// it returns ErrNotAvailable if the pool is at maximum capacity and no resources are available.
+// TryAcquire gets a resource from the pool if one is immediately available. If not, it returns ErrNotAvailable. If no
+// resources are available but the pool has room to grow, a resource will be created in the background. ctx is only
+// used to cancel the background creation.
 func (p *Pool) TryAcquire(ctx context.Context) (*Resource, error) {
-	return p.doAcquire(ctx, false)
+	p.cond.L.Lock()
+	defer p.cond.L.Unlock()
+
+	if p.closed {
+		return nil, ErrClosedPool
+	}
+
+	// If a resource is available now
+	if len(p.idleResources) > 0 {
+		res := p.idleResources[len(p.idleResources)-1]
+		p.idleResources[len(p.idleResources)-1] = nil // Avoid memory leak
+		p.idleResources = p.idleResources[:len(p.idleResources)-1]
+		p.acquireCount += 1
+		res.status = resourceStatusAcquired
+		return res, nil
+	}
+
+	go p.CreateResource(ctx)
+
+	return nil, ErrNotAvailable
 }
 
 // doAcquire implements shared logic behind Acquire and TryAcquire. If block is true
