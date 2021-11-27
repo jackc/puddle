@@ -175,14 +175,21 @@ func TestPoolAcquireReusesResources(t *testing.T) {
 	assert.Equal(t, 1, createCounter.Value())
 }
 
-func TestPoolTryAcquireDoesNotBlock(t *testing.T) {
+func TestPoolTryAcquire(t *testing.T) {
 	constructor, createCounter := createConstructor()
 	pool := puddle.NewPool(constructor, stubDestructor, 1)
 
+	// Pool is initially empty so TryAcquire fails but starts construction of resource in the background.
 	res, err := pool.TryAcquire(context.Background())
+	require.EqualError(t, err, puddle.ErrNotAvailable.Error())
+	assert.Nil(t, res)
+
+	// Wait for background creation to complete.
+	time.Sleep(100 * time.Millisecond)
+
+	res, err = pool.TryAcquire(context.Background())
 	require.NoError(t, err)
 	assert.Equal(t, 1, res.Value())
-
 	defer res.Release()
 
 	res, err = pool.TryAcquire(context.Background())
