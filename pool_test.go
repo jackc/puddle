@@ -761,6 +761,19 @@ func TestStress(t *testing.T) {
 			time.Sleep(time.Duration(rand.Int63n(2000)) * time.Nanosecond)
 			releaseOrDestroyOrHijack(res)
 		},
+		// TryAcquire
+		func() {
+			res, err := pool.TryAcquire(context.Background())
+			if err != nil {
+				if err != puddle.ErrClosedPool && err != puddle.ErrNotAvailable {
+					assert.Failf(t, "stress TryAcquire", "pool.TryAcquire returned unexpected err: %v", err)
+				}
+				return
+			}
+
+			time.Sleep(time.Duration(rand.Int63n(100)) * time.Millisecond)
+			releaseOrDestroyOrHijack(res)
+		},
 		// AcquireAllIdle (though under heavy load this will almost certainly always get an empty slice)
 		func() {
 			resources := pool.AcquireAllIdle()
