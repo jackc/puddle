@@ -262,39 +262,6 @@ func (p *Pool) Stat() *Stat {
 // maximum capacity it will block until a resource is available. ctx can be used
 // to cancel the Acquire.
 func (p *Pool) Acquire(ctx context.Context) (*Resource, error) {
-	return p.doAcquire(ctx, true)
-}
-
-// TryAcquire gets a resource from the pool if one is immediately available. If not, it returns ErrNotAvailable. If no
-// resources are available but the pool has room to grow, a resource will be created in the background. ctx is only
-// used to cancel the background creation.
-func (p *Pool) TryAcquire(ctx context.Context) (*Resource, error) {
-	p.cond.L.Lock()
-	defer p.cond.L.Unlock()
-
-	if p.closed {
-		return nil, ErrClosedPool
-	}
-
-	// If a resource is available now
-	if len(p.idleResources) > 0 {
-		res := p.idleResources[len(p.idleResources)-1]
-		p.idleResources[len(p.idleResources)-1] = nil // Avoid memory leak
-		p.idleResources = p.idleResources[:len(p.idleResources)-1]
-		p.acquireCount += 1
-		res.status = resourceStatusAcquired
-		return res, nil
-	}
-
-	go p.CreateResource(ctx)
-
-	return nil, ErrNotAvailable
-}
-
-// doAcquire implements shared logic behind Acquire and TryAcquire. If block is true
-// doAcquire will block until a resource becomes available. If block is false, doAcquire
-// will return ErrNotAvailable if no resource is available.
-func (p *Pool) doAcquire(ctx context.Context, block bool) (*Resource, error) {
 	startNano := nanotime()
 	if doneChan := ctx.Done(); doneChan != nil {
 		select {
@@ -367,10 +334,6 @@ func (p *Pool) doAcquire(ctx context.Context, block bool) (*Resource, error) {
 			p.acquireDuration += time.Duration(nanotime() - startNano)
 			p.cond.L.Unlock()
 			return res, nil
-		} else if !block {
-			// If the pool is at maximum capacity and we're not blocking
-			p.cond.L.Unlock()
-			return nil, ErrNotAvailable
 		}
 
 		if ctx.Done() == nil {
@@ -401,6 +364,32 @@ func (p *Pool) doAcquire(ctx context.Context, block bool) (*Resource, error) {
 			}
 		}
 	}
+}
+
+// TryAcquire gets a resource from the pool if one is immediately available. If not, it returns ErrNotAvailable. If no
+// resources are available but the pool has room to grow, a resource will be created in the background. ctx is only
+// used to cancel the background creation.
+func (p *Pool) TryAcquire(ctx context.Context) (*Resource, error) {
+	p.cond.L.Lock()
+	defer p.cond.L.Unlock()
+
+	if p.closed {
+		return nil, ErrClosedPool
+	}
+
+	// If a resource is available now
+	if len(p.idleResources) > 0 {
+		res := p.idleResources[len(p.idleResources)-1]
+		p.idleResources[len(p.idleResources)-1] = nil // Avoid memory leak
+		p.idleResources = p.idleResources[:len(p.idleResources)-1]
+		p.acquireCount += 1
+		res.status = resourceStatusAcquired
+		return res, nil
+	}
+
+	go p.CreateResource(ctx)
+
+	return nil, ErrNotAvailable
 }
 
 // AcquireAllIdle atomically acquires all currently idle resources. Its intended
