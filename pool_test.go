@@ -199,6 +199,28 @@ func TestPoolTryAcquire(t *testing.T) {
 	assert.Equal(t, 1, createCounter.Value())
 }
 
+func TestPoolTryAcquireReturnsErrorWhenPoolIsClosed(t *testing.T) {
+	constructor, _ := createConstructor()
+	pool := puddle.NewPool(constructor, stubDestructor, 10)
+	pool.Close()
+
+	res, err := pool.TryAcquire(context.Background())
+	assert.Equal(t, puddle.ErrClosedPool, err)
+	assert.Nil(t, res)
+}
+
+func TestPoolTryAcquireWithFailedResourceCreate(t *testing.T) {
+	errCreateFailed := errors.New("create failed")
+	constructor := func(ctx context.Context) (interface{}, error) {
+		return nil, errCreateFailed
+	}
+	pool := puddle.NewPool(constructor, stubDestructor, 10)
+
+	res, err := pool.TryAcquire(context.Background())
+	require.EqualError(t, err, puddle.ErrNotAvailable.Error())
+	assert.Nil(t, res)
+}
+
 func TestPoolAcquireNilContextDoesNotLeavePoolLocked(t *testing.T) {
 	constructor, createCounter := createConstructor()
 	pool := puddle.NewPool(constructor, stubDestructor, 10)
