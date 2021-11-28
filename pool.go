@@ -387,7 +387,28 @@ func (p *Pool) TryAcquire(ctx context.Context) (*Resource, error) {
 		return res, nil
 	}
 
-	go p.CreateResource(ctx)
+	if len(p.allResources) < int(p.maxSize) {
+		res := &Resource{pool: p, creationTime: time.Now(), lastUsedNano: nanotime(), status: resourceStatusConstructing}
+		p.allResources = append(p.allResources, res)
+		p.destructWG.Add(1)
+
+		go func() {
+			value, err := p.constructResourceValue(ctx)
+			defer p.cond.Signal()
+			p.cond.L.Lock()
+			defer p.cond.L.Unlock()
+
+			if err != nil {
+				p.allResources = removeResource(p.allResources, res)
+				p.destructWG.Done()
+				return
+			}
+
+			res.value = value
+			res.status = resourceStatusIdle
+			p.idleResources = append(p.idleResources, res)
+		}()
+	}
 
 	return nil, ErrNotAvailable
 }
