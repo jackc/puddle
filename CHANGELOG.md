@@ -1,3 +1,7 @@
+# 1.2.1 (December 2, 2021)
+
+* TryAcquire now does not block when background constructing resource
+
 # 1.2.0 (November 20, 2021)
 
 * Add TryAcquire (A. Jensen)
