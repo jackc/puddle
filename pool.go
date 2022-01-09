@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -266,9 +267,7 @@ func (p *Pool) Acquire(ctx context.Context) (*Resource, error) {
 	if doneChan := ctx.Done(); doneChan != nil {
 		select {
 		case <-ctx.Done():
-			p.cond.L.Lock()
-			p.canceledAcquireCount += 1
-			p.cond.L.Unlock()
+			atomic.AddInt64(&p.canceledAcquireCount, 1)
 			return nil, ctx.Err()
 		default:
 		}
@@ -356,9 +355,7 @@ func (p *Pool) Acquire(ctx context.Context) (*Resource, error) {
 					p.cond.L.Unlock()
 				}()
 
-				p.cond.L.Lock()
-				p.canceledAcquireCount += 1
-				p.cond.L.Unlock()
+				atomic.AddInt64(&p.canceledAcquireCount, 1)
 				return nil, ctx.Err()
 			case <-waitChan:
 			}
