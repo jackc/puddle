@@ -49,6 +49,14 @@ res.Release()
 
 ```
 
+## Status
+
+Puddle is complete. No changes are planned.
+
+* Bug reports and fixes are welcome.
+* New features will not be accepted if they can be feasibly implemented in a wrapper.
+* Performance optimizations will not be accepted unless the performance issue rises to the level of a bug.
+
 ## License
 
 MIT
