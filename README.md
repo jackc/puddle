@@ -22,15 +22,15 @@ own.
 ## Example Usage
 
 ```go
-constructor := func(context.Context) (interface{}, error) {
+constructor := func(context.Context) (net.Conn, error) {
   return net.Dial("tcp", "127.0.0.1:8080")
 }
-destructor := func(value interface{}) {
-  value.(net.Conn).Close()
+destructor := func(value net.Conn) {
+  value.Close()
 }
 maxPoolSize := 10
 
-pool := puddle.NewPool(constructor, destructor, maxPoolSize)
+pool := puddleg.NewPool(constructor, destructor, maxPoolSize)
 
 // Acquire resource from the pool.
 res, err := pool.Acquire(context.Background())
@@ -39,7 +39,7 @@ if err != nil {
 }
 
 // Use resource.
-_, err = res.Value().(net.Conn).Write([]byte{1})
+_, err = res.Value().Write([]byte{1})
 if err != nil {
   // ...
 }

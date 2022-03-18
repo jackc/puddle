@@ -1,8 +1,8 @@
-// +build purego appengine js
+//go:build purego || appengine || js
 
 // This file contains the safe implementation of nanotime using time.Now().
 
-package puddle
+package puddleg
 
 import (
 	"time"
