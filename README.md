@@ -51,7 +51,7 @@ res.Release()
 
 ## Status
 
-Puddle is complete. No changes are planned.
+Puddle v1 is complete. No changes are planned.
 
 * Bug reports and fixes are welcome.
 * New features will not be accepted if they can be feasibly implemented in a wrapper.
