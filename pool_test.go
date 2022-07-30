@@ -417,6 +417,82 @@ func TestPoolCloseIsSafeToCallMultipleTimes(t *testing.T) {
 	p.Close()
 }
 
+func TestPoolResetDestroysAllIdleResources(t *testing.T) {
+	constructor, _ := createConstructor()
+
+	var destructorCalls Counter
+	destructor := func(int) {
+		destructorCalls.Next()
+	}
+
+	p := puddle.NewPool(constructor, destructor, 10)
+
+	resources := make([]*puddle.Resource[int], 4)
+	for i := range resources {
+		var err error
+		resources[i], err = p.Acquire(context.Background())
+		require.Nil(t, err)
+	}
+
+	for _, res := range resources {
+		res.Release()
+	}
+
+	require.EqualValues(t, 4, p.Stat().TotalResources())
+	p.Reset()
+	require.EqualValues(t, 0, p.Stat().TotalResources())
+
+	// Destructors are called in the background. No way to know when they are all finished.
+	for i := 0; i < 100; i++ {
+		if destructorCalls.Value() == len(resources) {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	require.Equal(t, len(resources), destructorCalls.Value())
+
+	p.Close()
+}
+
+func TestPoolResetDestroysCheckedOutResourcesOnReturn(t *testing.T) {
+	constructor, _ := createConstructor()
+
+	var destructorCalls Counter
+	destructor := func(int) {
+		destructorCalls.Next()
+	}
+
+	p := puddle.NewPool(constructor, destructor, 10)
+
+	resources := make([]*puddle.Resource[int], 4)
+	for i := range resources {
+		var err error
+		resources[i], err = p.Acquire(context.Background())
+		require.Nil(t, err)
+	}
+
+	require.EqualValues(t, 4, p.Stat().TotalResources())
+	p.Reset()
+	require.EqualValues(t, 4, p.Stat().TotalResources())
+
+	for _, res := range resources {
+		res.Release()
+	}
+
+	require.EqualValues(t, 0, p.Stat().TotalResources())
+
+	// Destructors are called in the background. No way to know when they are all finished.
+	for i := 0; i < 100; i++ {
+		if destructorCalls.Value() == len(resources) {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	require.Equal(t, len(resources), destructorCalls.Value())
+
+	p.Close()
+}
+
 func TestPoolStatResources(t *testing.T) {
 	startWaitChan := make(chan struct{})
 	waitingChan := make(chan struct{})
