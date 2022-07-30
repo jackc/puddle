@@ -1,3 +1,8 @@
+# 2.0.0 (Unreleased)
+
+* Use generics instead of interface{} (Столяров Владимир Алексеевич)
+* Add Reset
+
 # 1.2.1 (December 2, 2021)
 
 * TryAcquire now does not block when background constructing resource
