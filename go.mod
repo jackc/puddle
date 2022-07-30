@@ -1,4 +1,4 @@
-module github.com/jackc/puddle
+module github.com/jackc/puddle/v2
 
 go 1.18
 

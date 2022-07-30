@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/puddle"
+	"github.com/jackc/puddle/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
