@@ -2,7 +2,7 @@
 
 // This file contains the safe implementation of nanotime using time.Now().
 
-package puddleg
+package puddle
 
 import (
 	"time"

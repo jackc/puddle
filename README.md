@@ -30,7 +30,7 @@ destructor := func(value net.Conn) {
 }
 maxPoolSize := 10
 
-pool := puddleg.NewPool(constructor, destructor, maxPoolSize)
+pool := puddle.NewPool(constructor, destructor, maxPoolSize)
 
 // Acquire resource from the pool.
 res, err := pool.Acquire(context.Background())

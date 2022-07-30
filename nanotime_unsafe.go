@@ -2,7 +2,7 @@
 
 // This file contains the implementation of nanotime using runtime.nanotime.
 
-package puddleg
+package puddle
 
 import "unsafe"
 

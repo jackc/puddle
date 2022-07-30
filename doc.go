@@ -1,4 +1,4 @@
-// Package puddle is a generic resource pool.
+// Package puddle is a generic resource pool with type-parametrized api.
 /*
 
 Puddle is a tiny generic resource pool library for Go that uses the standard

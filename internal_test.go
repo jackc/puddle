@@ -1,4 +1,4 @@
-package puddleg
+package puddle
 
 import (
 	"testing"
