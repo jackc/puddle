@@ -133,6 +133,32 @@ func TestPoolAcquireReturnsErrorFromFailedResourceCreate(t *testing.T) {
 	assert.Nil(t, res)
 }
 
+func TestPoolAcquireCreatesResourceRespectingContext(t *testing.T) {
+	var cancel func()
+	constructor := func(ctx context.Context) (int, error) {
+		cancel()
+		// sleep to give a chance for the acquire to recognize it's cancelled
+		time.Sleep(10 * time.Millisecond)
+		return 1, nil
+	}
+	pool := puddle.NewPool(constructor, stubDestructor, 1)
+	defer pool.Close()
+
+	var ctx context.Context
+	ctx, cancel = context.WithCancel(context.Background())
+	defer cancel()
+	_, err := pool.Acquire(ctx)
+	assert.ErrorIs(t, err, context.Canceled)
+
+	// wait for the constructor to sleep and then for the resource to be added back
+	// to the idle pool
+	time.Sleep(100 * time.Millisecond)
+
+	stat := pool.Stat()
+	assert.EqualValues(t, 1, stat.IdleResources())
+	assert.EqualValues(t, 1, stat.TotalResources())
+}
+
 func TestPoolAcquireReusesResources(t *testing.T) {
 	constructor, createCounter := createConstructor()
 	pool := puddle.NewPool(constructor, stubDestructor, 10)
@@ -544,7 +570,12 @@ func TestPoolStatResources(t *testing.T) {
 
 func TestPoolStatSuccessfulAcquireCounters(t *testing.T) {
 	constructor, _ := createConstructor()
-	pool := puddle.NewPool(constructor, stubDestructor, 1)
+	sleepConstructor := func(ctx context.Context) (int, error) {
+		// sleep to make sure we don't fail the AcquireDuration test
+		time.Sleep(time.Nanosecond)
+		return constructor(ctx)
+	}
+	pool := puddle.NewPool(sleepConstructor, stubDestructor, 1)
 	defer pool.Close()
 
 	res, err := pool.Acquire(context.Background())
