@@ -323,49 +323,34 @@ func (p *Pool[T]) Acquire(ctx context.Context) (*Resource[T], error) {
 					p.allResources = removeResource(p.allResources, res)
 					p.destructWG.Done()
 
-					select {
-					case <-ctx.Done():
-						if err == ctx.Err() {
-							p.canceledAcquireCount += 1
-						}
-					default:
-					}
-
-					p.cond.L.Unlock()
-					p.cond.Signal()
-
-					// try to notify the caller that we failed
+					// we can't use default here in case we get here before the caller is
+					// in the select
 					select {
 					case constructErrCh <- err:
-					default:
+					case <-ctx.Done():
+						p.canceledAcquireCount += 1
 					}
+					p.cond.L.Unlock()
+					p.cond.Signal()
 					return
 				}
 				res.value = value
 
-				// check the context now so we don't increment the metrics when the caller
-				// has already been cancelled
+				// assume that we will acquire it
+				res.status = resourceStatusAcquired
+				// we can't use default here in case we get here before the caller is
+				// in the select
 				select {
-				case <-ctx.Done():
-					p.cond.L.Unlock()
-				default:
-					// assume that we will acquire it
-					res.status = resourceStatusAcquired
-					// we have to increment these BEFORE the next select because otherwise
-					// they could run after Acquire has returned and that will mess up
-					// tests but this also means that these could be incremented even if
-					// the acquire times out, but we just checked that so the chances are
-					// slim
+				case constructErrCh <- nil:
 					p.emptyAcquireCount += 1
 					p.acquireCount += 1
 					p.acquireDuration += time.Duration(nanotime() - startNano)
 					p.cond.L.Unlock()
+					// we don't call Signal here we didn't change any of the resource pools
+				case <-ctx.Done():
+					p.canceledAcquireCount += 1
+					p.cond.L.Unlock()
 					// we don't call Signal here we didn't change any of the resopurce pools
-				}
-
-				select {
-				case constructErrCh <- nil:
-				default:
 					// since we couldn't send the constructed resource to the acquire
 					// function that means the caller has stopped waiting and we should
 					// just put this resource back in the pool
