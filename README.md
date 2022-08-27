@@ -1,5 +1,5 @@
 [![](https://godoc.org/github.com/jackc/puddle?status.svg)](https://godoc.org/github.com/jackc/puddle)
-[![Build Status](https://travis-ci.org/jackc/puddle.svg)](https://travis-ci.org/jackc/puddle)
+![Build Status](https://github.com/jackc/puddle/actions/workflows/ci.yml/badge.svg)
 
 # Puddle
 
