@@ -1,3 +1,7 @@
+# 1.3.0 (August 27, 2022)
+
+* Acquire creates resources in background to allow creation to continue after Acquire is canceled (James Hartig)
+
 # 1.2.1 (December 2, 2021)
 
 * TryAcquire now does not block when background constructing resource
