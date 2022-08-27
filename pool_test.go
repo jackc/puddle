@@ -595,6 +595,9 @@ func TestPoolStatCanceledAcquireDuringCreate(t *testing.T) {
 	_, err := pool.Acquire(ctx)
 	require.Equal(t, context.Canceled, err)
 
+	// sleep to give the constructor goroutine time to mark cancelled
+	time.Sleep(10 * time.Millisecond)
+
 	stat := pool.Stat()
 	assert.Equal(t, int64(0), stat.AcquireCount())
 	assert.Equal(t, int64(1), stat.CanceledAcquireCount())
