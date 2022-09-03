@@ -54,8 +54,8 @@ res.Release()
 Puddle is stable and feature complete.
 
 * Bug reports and fixes are welcome.
-* New features will not be accepted if they can be feasibly implemented in a wrapper.
-* Performance optimizations will not be accepted unless the performance issue rises to the level of a bug.
+* New features will usually not be accepted if they can be feasibly implemented in a wrapper.
+* Performance optimizations will usually not be accepted unless the performance issue rises to the level of a bug.
 
 ## License
 
