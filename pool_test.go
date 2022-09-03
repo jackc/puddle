@@ -865,13 +865,13 @@ func TestPoolAcquireReturnsErrorWhenPoolIsClosed(t *testing.T) {
 
 func TestSignalIsSentWhenResourceFailedToCreate(t *testing.T) {
 	var c Counter
-	constructor := func(context.Context) (a interface{}, err error) {
+	constructor := func(context.Context) (a any, err error) {
 		if c.Next() == 2 {
 			return nil, errors.New("outage")
 		}
 		return 1, nil
 	}
-	destructor := func(value interface{}) {}
+	destructor := func(value any) {}
 
 	pool, err := puddle.NewPool(&puddle.Config[any]{Constructor: constructor, Destructor: destructor, MaxSize: 10})
 	require.NoError(t, err)
@@ -1035,10 +1035,10 @@ func ExamplePool() {
 	startAcceptOnceDummyServer(laddr)
 
 	// Pool creation
-	constructor := func(context.Context) (interface{}, error) {
+	constructor := func(context.Context) (any, error) {
 		return net.Dial("tcp", laddr)
 	}
-	destructor := func(value interface{}) {
+	destructor := func(value any) {
 		value.(net.Conn).Close()
 	}
 	maxPoolSize := int32(10)
