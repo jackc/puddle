@@ -2,6 +2,8 @@
 
 * Use generics instead of interface{} (Столяров Владимир Алексеевич)
 * Add Reset
+* Do not cancel resource construction when Acquire is canceled
+* NewPool takes Config
 
 # 1.3.0 (August 27, 2022)
 
