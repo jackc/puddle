@@ -132,19 +132,25 @@ type Pool[T any] struct {
 	closed bool
 }
 
+type Config[T any] struct {
+	Constructor Constructor[T]
+	Destructor  Destructor[T]
+	MaxSize     int32
+}
+
 // NewPool creates a new pool. Panics if maxSize is less than 1.
-func NewPool[T any](constructor Constructor[T], destructor Destructor[T], maxSize int32) *Pool[T] {
-	if maxSize < 1 {
-		panic("maxSize is less than 1")
+func NewPool[T any](config *Config[T]) (*Pool[T], error) {
+	if config.MaxSize < 1 {
+		return nil, errors.New("MaxSize must be >= 1")
 	}
 
 	return &Pool[T]{
 		cond:        sync.NewCond(new(sync.Mutex)),
 		destructWG:  &sync.WaitGroup{},
-		maxSize:     maxSize,
-		constructor: constructor,
-		destructor:  destructor,
-	}
+		maxSize:     config.MaxSize,
+		constructor: config.Constructor,
+		destructor:  config.Destructor,
+	}, nil
 }
 
 // Close destroys all resources in the pool and rejects future Acquire calls.
