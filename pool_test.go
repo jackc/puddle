@@ -75,6 +75,52 @@ func TestPoolAcquireCreatesResourceWhenNoneIdle(t *testing.T) {
 	res.Release()
 }
 
+func TestPoolAcquireCallsConstructorWithAcquireContextValuesButNotDeadline(t *testing.T) {
+	constructor := func(ctx context.Context) (int, error) {
+		if ctx.Value("test") != "from Acquire" {
+			return 0, errors.New("did not get value from Acquire")
+		}
+		if _, ok := ctx.Deadline(); ok {
+			return 0, errors.New("should not have gotten deadline from Acquire")
+		}
+
+		return 1, nil
+	}
+	pool, err := puddle.NewPool(&puddle.Config[int]{Constructor: constructor, Destructor: stubDestructor, MaxSize: 10})
+	require.NoError(t, err)
+	defer pool.Close()
+
+	ctx := context.WithValue(context.Background(), "test", "from Acquire")
+	ctx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+	defer cancel()
+	res, err := pool.Acquire(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 1, res.Value())
+	assert.WithinDuration(t, time.Now(), res.CreationTime(), time.Second)
+	res.Release()
+}
+
+func TestPoolAcquireCalledConstructorIsNotCanceledByAcquireCancellation(t *testing.T) {
+	constructor := func(ctx context.Context) (int, error) {
+		time.Sleep(100 * time.Millisecond)
+		return 1, nil
+	}
+	pool, err := puddle.NewPool(&puddle.Config[int]{Constructor: constructor, Destructor: stubDestructor, MaxSize: 10})
+	require.NoError(t, err)
+	defer pool.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancel()
+	res, err := pool.Acquire(ctx)
+	assert.Nil(t, res)
+	assert.Equal(t, context.DeadlineExceeded, err)
+
+	time.Sleep(200 * time.Millisecond)
+
+	assert.EqualValues(t, 1, pool.Stat().TotalResources())
+	assert.EqualValues(t, 1, pool.Stat().CanceledAcquireCount())
+}
+
 func TestPoolAcquireDoesNotCreatesResourceWhenItWouldExceedMaxSize(t *testing.T) {
 	constructor, createCounter := createConstructor()
 	pool, err := puddle.NewPool(&puddle.Config[int]{Constructor: constructor, Destructor: stubDestructor, MaxSize: 1})
