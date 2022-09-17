@@ -1,4 +1,4 @@
-# 2.0.0 (Unreleased)
+# 2.0.0 (September 17, 2022)
 
 * Use generics instead of interface{} (Столяров Владимир Алексеевич)
 * Add Reset
