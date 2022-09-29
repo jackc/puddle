@@ -27,18 +27,18 @@ type Counter struct {
 // Next increments the counter and returns the value
 func (c *Counter) Next() int {
 	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
 	c.n += 1
-	n := c.n
-	c.mutex.Unlock()
-	return n
+	return c.n
 }
 
 // Value returns the counter
 func (c *Counter) Value() int {
 	c.mutex.Lock()
-	n := c.n
-	c.mutex.Unlock()
-	return n
+	defer c.mutex.Unlock()
+
+	return c.n
 }
 
 func createConstructor() (puddle.Constructor[int], *Counter) {
