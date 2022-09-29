@@ -1170,3 +1170,92 @@ func BenchmarkPoolAcquireAndRelease(b *testing.B) {
 		})
 	}
 }
+
+func benchmarkPool[T any](t testing.TB) *puddle.Pool[T] {
+	cfg := puddle.Config[T]{
+		MaxSize: 1,
+		Constructor: func(ctx context.Context) (T, error) {
+			var zero T
+			return zero, nil
+		},
+		Destructor: func(T) {},
+	}
+
+	pool, err := puddle.NewPool(&cfg)
+	require.NoError(t, err)
+	t.Cleanup(pool.Close)
+
+	return pool
+}
+
+func releaser[T any](t testing.TB) chan<- *puddle.Resource[T] {
+	startChan := make(chan struct{})
+	workChan := make(chan *puddle.Resource[T], 1)
+
+	go func() {
+		close(startChan)
+
+		for r := range workChan {
+			r.Release()
+		}
+	}()
+	t.Cleanup(func() { close(workChan) })
+
+	// Wait for goroutine start.
+	<-startChan
+	return workChan
+}
+
+func BenchmarkAcquire_ReleaseAfterAcquire(b *testing.B) {
+	r := require.New(b)
+	ctx := context.Background()
+	pool := benchmarkPool[int32](b)
+	releaseChan := releaser[int32](b)
+
+	res, err := pool.Acquire(ctx)
+	r.NoError(err)
+	// We need to release the last connection. Otherwise the pool.Close()
+	// method will block and this function will never return.
+	defer func() { res.Release() }()
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		releaseChan <- res
+		res, err = pool.Acquire(ctx)
+		r.NoError(err)
+	}
+}
+
+func BenchmarkAcquire_ReleaseAfterAcquireWithCPUOverload(b *testing.B) {
+	r := require.New(b)
+	ctx := context.Background()
+	pool := benchmarkPool[int32](b)
+	releaseChan := releaser[int32](b)
+
+	// Multiply by 2 to similate overload of the system.
+	numGoroutines := runtime.NumCPU() * 2
+	for i := 0; i < numGoroutines; i++ {
+		startChan := make(chan struct{})
+		go func() {
+			close(startChan)
+
+			// Similate computationally intensive task.
+			for j := 0; true; j++ {
+			}
+		}()
+		<-startChan
+	}
+
+	res, err := pool.Acquire(ctx)
+	r.NoError(err)
+	// We need to release the last connection. Otherwise the pool.Close()
+	// method will block and this function will never return.
+	defer func() { res.Release() }()
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		releaseChan <- res
+		res, err = pool.Acquire(ctx)
+		r.NoError(err)
+	}
+}
