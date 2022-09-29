@@ -1170,7 +1170,6 @@ func BenchmarkPoolAcquireAndRelease(b *testing.B) {
 		})
 	}
 }
-
 func benchmarkPool[T any](t testing.TB) *puddle.Pool[T] {
 	cfg := puddle.Config[T]{
 		MaxSize: 1,
@@ -1204,6 +1203,27 @@ func releaser[T any](t testing.TB) chan<- *puddle.Resource[T] {
 	// Wait for goroutine start.
 	<-startChan
 	return workChan
+}
+
+func TestReleaseAfterAcquire(t *testing.T) {
+	const cnt = 100000
+
+	r := require.New(t)
+	ctx := context.Background()
+	pool := benchmarkPool[int32](t)
+	releaseChan := releaser[int32](t)
+
+	res, err := pool.Acquire(ctx)
+	r.NoError(err)
+	// We need to release the last connection. Otherwise the pool.Close()
+	// method will block and this function will never return.
+	defer func() { res.Release() }()
+
+	for i := 0; i < cnt; i++ {
+		releaseChan <- res
+		res, err = pool.Acquire(ctx)
+		r.NoError(err)
+	}
 }
 
 func BenchmarkAcquire_ReleaseAfterAcquire(b *testing.B) {
