@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -125,7 +126,7 @@ type Pool[T any] struct {
 	acquireCount         int64
 	acquireDuration      time.Duration
 	emptyAcquireCount    int64
-	canceledAcquireCount int64
+	canceledAcquireCount atomic.Int64
 
 	resetCount int
 
@@ -254,7 +255,7 @@ func (p *Pool[T]) Stat() *Stat {
 		maxResources:         p.maxSize,
 		acquireCount:         p.acquireCount,
 		emptyAcquireCount:    p.emptyAcquireCount,
-		canceledAcquireCount: p.canceledAcquireCount,
+		canceledAcquireCount: p.canceledAcquireCount.Load(),
 		acquireDuration:      p.acquireDuration,
 	}
 
@@ -293,15 +294,11 @@ func (ctx *valueCancelCtx) Value(key any) any           { return ctx.valueCtx.Va
 // the problem of it being impossible to create resources when the time to create a resource is greater than any one
 // caller of Acquire is willing to wait.
 func (p *Pool[T]) Acquire(ctx context.Context) (*Resource[T], error) {
-	if doneChan := ctx.Done(); doneChan != nil {
-		select {
-		case <-ctx.Done():
-			p.cond.L.Lock()
-			p.canceledAcquireCount += 1
-			p.cond.L.Unlock()
-			return nil, ctx.Err()
-		default:
-		}
+	select {
+	case <-ctx.Done():
+		p.canceledAcquireCount.Add(1)
+		return nil, ctx.Err()
+	default:
 	}
 
 	return p.acquire(ctx)
@@ -387,9 +384,7 @@ func (p *Pool[T]) acquire(ctx context.Context) (*Resource[T], error) {
 
 			select {
 			case <-ctx.Done():
-				p.cond.L.Lock()
-				p.canceledAcquireCount += 1
-				p.cond.L.Unlock()
+				p.canceledAcquireCount.Add(1)
 				return nil, ctx.Err()
 			case err := <-constructErrCh:
 				if err != nil {
@@ -421,9 +416,7 @@ func (p *Pool[T]) acquire(ctx context.Context) (*Resource[T], error) {
 					p.cond.Signal()
 				}()
 
-				p.cond.L.Lock()
-				p.canceledAcquireCount += 1
-				p.cond.L.Unlock()
+				p.canceledAcquireCount.Add(1)
 				return nil, ctx.Err()
 			case <-waitChan:
 			}
@@ -526,15 +519,15 @@ func (p *Pool[T]) CreateResource(ctx context.Context) error {
 	}
 
 	p.cond.L.Lock()
+	defer p.cond.L.Unlock()
+
 	// If closed while constructing resource then destroy it and return an error
 	if p.closed {
 		go p.destructResourceValue(res.value)
-		p.cond.L.Unlock()
 		return ErrClosedPool
 	}
 	p.allResources = append(p.allResources, res)
 	p.idleResources = append(p.idleResources, res)
-	p.cond.L.Unlock()
 
 	return nil
 }
