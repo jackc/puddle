@@ -355,11 +355,16 @@ func (p *Pool[T]) acquire(ctx context.Context) (*Resource[T], error) {
 				if err != nil {
 					p.allResources = removeResource(p.allResources, res)
 					p.destructWG.Done()
-
-					constructErrCh <- err
-
 					p.cond.L.Unlock()
 					p.cond.Signal()
+
+					select {
+					case constructErrCh <- err:
+					case <-ctx.Done():
+						// The caller is cancelled, so
+						// no-one awaits the error. This
+						// branch avoid goroutine leak.
+					}
 					return
 				}
 
