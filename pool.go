@@ -476,19 +476,47 @@ func (p *Pool[T]) TryAcquire(ctx context.Context) (*Resource[T], error) {
 	return nil, ErrNotAvailable
 }
 
-// AcquireAllIdle atomically acquires all currently idle resources. Its intended
-// use is for health check and keep-alive functionality. It does not update pool
+// acquireSemAll acquires all free tokens from sem. This function is guaranteed
+// to acquire at least the lowest number of tokens that has been available in
+// the semaphore during runtime of this function.
+//
+// For the time being, semaphore doesn't allow to acquire all tokens atomically
+// (see https://github.com/golang/sync/pull/19). We simulate this by trying all
+// powers of 2 that are less or equal to max.
+//
+// For example, let's immagine we have 19 free tokens in the semaphore which in
+// total has 24 tokens (i.e. the maxSize of the pool is 24 resources). Then max
+// is 24, the log2Uint(24) is 4 and we try to acquire 16, 8, 4, 2 and 1 tokens.
+// Out of those, the acquire of 16, 2 and 1 tokens will succeed.
+//
+// Naturally, Acquires and Releases of the semaphore might take place
+// concurrently. For this reason, it's not guaranteed that absolutely all free
+// tokens in the semaphore will be acquired. But it's guaranteed that at least
+// the minimal number of tokens that has been present over the whole process
+// will be acquired. This is sufficient for the use-case we have in this
+// package.
+func acquireSemAll[T ints](sem *semaphore.Weighted, max T) int {
+	var cnt int
+	for i := int(log2Int(max)); i >= 0; i-- {
+		val := int(1) << i
+		if sem.TryAcquire(int64(val)) {
+			cnt += val
+		}
+	}
+
+	return cnt
+}
+
+// AcquireAllIdle acquires all currently idle resources. Its intended use is for
+// health check and keep-alive functionality. It does not update pool
 // statistics.
 func (p *Pool[T]) AcquireAllIdle() []*Resource[T] {
-	var cnt int
-	for p.acquireSem.TryAcquire(1) {
-		cnt++
-	}
+	// TODO: Replace this with acquireSem.TryAcqireAll() if it gets to
+	// upstream. https://github.com/golang/sync/pull/19
+	cnt := acquireSemAll(p.acquireSem, int64(p.maxSize))
 	if cnt == 0 {
 		return nil
 	}
-
-	resources := make([]*Resource[T], 0, cnt)
 
 	p.mux.Lock()
 	defer p.mux.Unlock()
@@ -510,10 +538,11 @@ func (p *Pool[T]) AcquireAllIdle() []*Resource[T] {
 	// after this loop will (1) either be acquired soon (semaphore was
 	// already acquired for them) or (2) were released after start of this
 	// function.
+	resources := make([]*Resource[T], cnt)
 	for i := 0; i < cnt; i++ {
 		res := p.idleResources.Dequeue()
 		res.status = resourceStatusAcquired
-		resources = append(resources, res)
+		resources[i] = res
 	}
 
 	return resources
