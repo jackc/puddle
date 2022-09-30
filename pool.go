@@ -293,7 +293,6 @@ func (ctx *valueCancelCtx) Value(key any) any           { return ctx.valueCtx.Va
 // the problem of it being impossible to create resources when the time to create a resource is greater than any one
 // caller of Acquire is willing to wait.
 func (p *Pool[T]) Acquire(ctx context.Context) (*Resource[T], error) {
-	startNano := nanotime()
 	if doneChan := ctx.Done(); doneChan != nil {
 		select {
 		case <-ctx.Done():
@@ -305,6 +304,13 @@ func (p *Pool[T]) Acquire(ctx context.Context) (*Resource[T], error) {
 		}
 	}
 
+	return p.acquire(ctx)
+}
+
+// acquire is a continuation of Acquire function that doesn't check context
+// validity. This function exists separatly only for benchmarking purposes.
+func (p *Pool[T]) acquire(ctx context.Context) (*Resource[T], error) {
+	startNano := nanotime()
 	p.cond.L.Lock()
 
 	emptyAcquire := false
