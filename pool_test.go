@@ -1226,25 +1226,32 @@ func BenchmarkAcquire_ReleaseAfterAcquire(b *testing.B) {
 	}
 }
 
-func BenchmarkAcquire_ReleaseAfterAcquireWithCPUOverload(b *testing.B) {
-	r := require.New(b)
-	ctx := context.Background()
-	pool := benchmarkPool[int32](b)
-	releaseChan := releaser[int32](b)
-
+func withCPULoad() {
 	// Multiply by 2 to similate overload of the system.
 	numGoroutines := runtime.NumCPU() * 2
+
+	var wg sync.WaitGroup
 	for i := 0; i < numGoroutines; i++ {
-		startChan := make(chan struct{})
+		wg.Add(1)
 		go func() {
-			close(startChan)
+			wg.Done()
 
 			// Similate computationally intensive task.
 			for j := 0; true; j++ {
 			}
 		}()
-		<-startChan
 	}
+
+	wg.Wait()
+}
+
+func BenchmarkAcquire_ReleaseAfterAcquireWithCPULoad(b *testing.B) {
+	r := require.New(b)
+	ctx := context.Background()
+	pool := benchmarkPool[int32](b)
+	releaseChan := releaser[int32](b)
+
+	withCPULoad()
 
 	res, err := pool.Acquire(ctx)
 	r.NoError(err)
@@ -1254,6 +1261,68 @@ func BenchmarkAcquire_ReleaseAfterAcquireWithCPUOverload(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
+		releaseChan <- res
+		res, err = pool.Acquire(ctx)
+		r.NoError(err)
+	}
+}
+
+func BenchmarkAcquire_MultipleCancelled(b *testing.B) {
+	const cancelCnt = 64
+
+	r := require.New(b)
+	ctx := context.Background()
+	pool := benchmarkPool[int32](b)
+	releaseChan := releaser[int32](b)
+
+	cancelCtx, cancel := context.WithCancel(ctx)
+	cancel()
+
+	res, err := pool.Acquire(ctx)
+	r.NoError(err)
+	// We need to release the last connection. Otherwise the pool.Close()
+	// method will block and this function will never return.
+	defer func() { res.Release() }()
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		for j := 0; j < cancelCnt; j++ {
+			_, err = pool.AcquireRaw(cancelCtx)
+			r.Equal(context.Canceled, err)
+		}
+
+		releaseChan <- res
+		res, err = pool.Acquire(ctx)
+		r.NoError(err)
+	}
+}
+
+func BenchmarkAcquire_MultipleCancelledWithCPULoad(b *testing.B) {
+	const cancelCnt = 3
+
+	r := require.New(b)
+	ctx := context.Background()
+	pool := benchmarkPool[int32](b)
+	releaseChan := releaser[int32](b)
+
+	cancelCtx, cancel := context.WithCancel(ctx)
+	cancel()
+
+	withCPULoad()
+
+	res, err := pool.Acquire(ctx)
+	r.NoError(err)
+	// We need to release the last connection. Otherwise the pool.Close()
+	// method will block and this function will never return.
+	defer func() { res.Release() }()
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		for j := 0; j < cancelCnt; j++ {
+			_, err = pool.AcquireRaw(cancelCtx)
+			r.Equal(context.Canceled, err)
+		}
+
 		releaseChan <- res
 		res, err = pool.Acquire(ctx)
 		r.NoError(err)
