@@ -4,10 +4,10 @@ import (
 	"context"
 	"errors"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/jackc/puddle/v2/internal/circ"
+	"go.uber.org/atomic"
 	"golang.org/x/sync/semaphore"
 )
 
@@ -365,6 +365,7 @@ func (p *Pool[T]) acquire(ctx context.Context) (*Resource[T], error) {
 	if len(p.allResources) >= int(p.maxSize) {
 		p.mux.Unlock()
 		p.acquireSem.Release(1)
+		// Unreachable code.
 		panic("bug: semaphore allowed more acquires than pool allows")
 	}
 
@@ -449,6 +450,7 @@ func (p *Pool[T]) TryAcquire(ctx context.Context) (*Resource[T], error) {
 	}
 
 	if len(p.allResources) >= int(p.maxSize) {
+		// Unreachable code.
 		panic("bug: semaphore allowed more acquires than pool allows")
 	}
 
