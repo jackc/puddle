@@ -16,9 +16,10 @@ func (l *resList[T]) popBack() *Resource[T] {
 func (l *resList[T]) remove(val *Resource[T]) {
 	for i, elem := range *l {
 		if elem == val {
-			(*l)[i] = (*l)[len(*l)-1]
-			(*l)[len(*l)-1] = nil // Avoid memory leak
-			(*l) = (*l)[:len(*l)-1]
+			lastIdx := len(*l) - 1
+			(*l)[i] = (*l)[lastIdx]
+			(*l)[lastIdx] = nil // Avoid memory leak
+			(*l) = (*l)[:lastIdx]
 			return
 		}
 	}

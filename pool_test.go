@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/puddle/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sync/semaphore"
 )
 
 type Counter struct {
@@ -894,6 +895,17 @@ func TestSignalIsSentWhenResourceFailedToCreate(t *testing.T) {
 	wg.Wait()
 }
 
+func stressTestDur(t testing.TB) time.Duration {
+	s := os.Getenv("STRESS_TEST_DURATION")
+	if s == "" {
+		s = "1s"
+	}
+
+	dur, err := time.ParseDuration(s)
+	require.Nil(t, err)
+	return dur
+}
+
 func TestStress(t *testing.T) {
 	constructor, _ := createConstructor()
 	var destructorCalls Counter
@@ -980,10 +992,10 @@ func TestStress(t *testing.T) {
 	for i := 0; i < workerCount; i++ {
 		wg.Add(1)
 		go func() {
+			defer wg.Done()
 			for {
 				select {
 				case <-finishChan:
-					wg.Done()
 					return
 				default:
 				}
@@ -993,16 +1005,114 @@ func TestStress(t *testing.T) {
 		}()
 	}
 
-	s := os.Getenv("STRESS_TEST_DURATION")
-	if s == "" {
-		s = "1s"
-	}
-	testDuration, err := time.ParseDuration(s)
-	require.Nil(t, err)
-	time.AfterFunc(testDuration, func() { close(finishChan) })
+	time.AfterFunc(stressTestDur(t), func() { close(finishChan) })
 	wg.Wait()
-
 	pool.Close()
+}
+
+func TestStress_AcquireAllIdle_TryAcquire(t *testing.T) {
+	r := require.New(t)
+
+	pool := testPool[int32](t)
+
+	var wg sync.WaitGroup
+	done := make(chan struct{})
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+
+		for {
+			select {
+			case <-done:
+				return
+			default:
+			}
+
+			idleRes := pool.AcquireAllIdle()
+			r.Less(len(idleRes), 2)
+			for _, res := range idleRes {
+				res.Release()
+			}
+		}
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+
+		for {
+			select {
+			case <-done:
+				return
+			default:
+			}
+
+			res, err := pool.TryAcquire(context.Background())
+			if err != nil {
+				r.Equal(puddle.ErrNotAvailable, err)
+			} else {
+				r.NotNil(res)
+				res.Release()
+			}
+		}
+	}()
+
+	time.AfterFunc(stressTestDur(t), func() { close(done) })
+	wg.Wait()
+}
+
+func TestStress_AcquireAllIdle_Acquire(t *testing.T) {
+	r := require.New(t)
+
+	pool := testPool[int32](t)
+
+	var wg sync.WaitGroup
+	done := make(chan struct{})
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+
+		for {
+			select {
+			case <-done:
+				return
+			default:
+			}
+
+			idleRes := pool.AcquireAllIdle()
+			r.Less(len(idleRes), 2)
+			for _, res := range idleRes {
+				r.NotNil(res)
+				res.Release()
+			}
+		}
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+
+		for {
+			select {
+			case <-done:
+				return
+			default:
+			}
+
+			res, err := pool.Acquire(context.Background())
+			if err != nil {
+				r.Equal(puddle.ErrNotAvailable, err)
+			} else {
+				r.NotNil(res)
+				res.Release()
+			}
+		}
+	}()
+
+	time.AfterFunc(stressTestDur(t), func() { close(done) })
+	wg.Wait()
 }
 
 func startAcceptOnceDummyServer(laddr string) {
@@ -1170,7 +1280,22 @@ func BenchmarkPoolAcquireAndRelease(b *testing.B) {
 		})
 	}
 }
-func benchmarkPool[T any](t testing.TB) *puddle.Pool[T] {
+
+func TestAcquireAllSem(t *testing.T) {
+	r := require.New(t)
+
+	sem := semaphore.NewWeighted(5)
+	r.Equal(4, puddle.AcquireSemAll(sem, 4))
+	sem.Release(4)
+
+	r.Equal(5, puddle.AcquireSemAll(sem, 5))
+	sem.Release(5)
+
+	r.Equal(5, puddle.AcquireSemAll(sem, 6))
+	sem.Release(5)
+}
+
+func testPool[T any](t testing.TB) *puddle.Pool[T] {
 	cfg := puddle.Config[T]{
 		MaxSize: 1,
 		Constructor: func(ctx context.Context) (T, error) {
@@ -1210,7 +1335,7 @@ func TestReleaseAfterAcquire(t *testing.T) {
 
 	r := require.New(t)
 	ctx := context.Background()
-	pool := benchmarkPool[int32](t)
+	pool := testPool[int32](t)
 	releaseChan := releaser[int32](t)
 
 	res, err := pool.Acquire(ctx)
@@ -1229,7 +1354,7 @@ func TestReleaseAfterAcquire(t *testing.T) {
 func BenchmarkAcquire_ReleaseAfterAcquire(b *testing.B) {
 	r := require.New(b)
 	ctx := context.Background()
-	pool := benchmarkPool[int32](b)
+	pool := testPool[int32](b)
 	releaseChan := releaser[int32](b)
 
 	res, err := pool.Acquire(ctx)
@@ -1268,7 +1393,7 @@ func withCPULoad() {
 func BenchmarkAcquire_ReleaseAfterAcquireWithCPULoad(b *testing.B) {
 	r := require.New(b)
 	ctx := context.Background()
-	pool := benchmarkPool[int32](b)
+	pool := testPool[int32](b)
 	releaseChan := releaser[int32](b)
 
 	withCPULoad()
@@ -1292,7 +1417,7 @@ func BenchmarkAcquire_MultipleCancelled(b *testing.B) {
 
 	r := require.New(b)
 	ctx := context.Background()
-	pool := benchmarkPool[int32](b)
+	pool := testPool[int32](b)
 	releaseChan := releaser[int32](b)
 
 	cancelCtx, cancel := context.WithCancel(ctx)
@@ -1322,7 +1447,7 @@ func BenchmarkAcquire_MultipleCancelledWithCPULoad(b *testing.B) {
 
 	r := require.New(b)
 	ctx := context.Background()
-	pool := benchmarkPool[int32](b)
+	pool := testPool[int32](b)
 	releaseChan := releaser[int32](b)
 
 	cancelCtx, cancel := context.WithCancel(ctx)

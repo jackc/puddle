@@ -12,6 +12,7 @@ import (
 func TestLog2Uint(t *testing.T) {
 	r := require.New(t)
 
+	r.Equal(uint8(0), log2Int(1))
 	r.Equal(uint8(0), log2Int[uint64](1))
 	r.Equal(uint8(1), log2Int[uint32](2))
 	r.Equal(uint8(7), log2Int[uint8](math.MaxUint8))
