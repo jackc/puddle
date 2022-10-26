@@ -4,10 +4,10 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/puddle/v2/internal/genstack"
-	"go.uber.org/atomic"
 	"golang.org/x/sync/semaphore"
 )
 
