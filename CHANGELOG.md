@@ -1,3 +1,8 @@
+# 2.1.0 (October 28, 2022)
+
+* Concurrency control is now implemented with a semaphore. This simplifies some internal logic, resolves a few error conditions (including a deadlock), and improves performance. (Jan Dubsky)
+* Go 1.19 is now required for the improved atomic support.
+
 # 2.0.1 (October 28, 2022)
 
 * Fix race condition when Close is called concurrently with multiple constructors
