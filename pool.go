@@ -593,10 +593,12 @@ func (p *Pool[T]) CreateResource(ctx context.Context) error {
 		p.mux.Unlock()
 		return ErrClosedPool
 	}
-	p.mux.Unlock()
+	p.destructWG.Add(1)
+	p.cond.L.Unlock()
 
 	value, err := p.constructor(ctx)
 	if err != nil {
+		p.destructWG.Done()
 		return err
 	}
 
@@ -608,7 +610,6 @@ func (p *Pool[T]) CreateResource(ctx context.Context) error {
 		lastUsedNano:   nanotime(),
 		poolResetCount: p.resetCount,
 	}
-	p.destructWG.Add(1)
 
 	p.mux.Lock()
 	defer p.mux.Unlock()
