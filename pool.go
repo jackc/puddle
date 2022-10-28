@@ -496,10 +496,12 @@ func (p *Pool[T]) CreateResource(ctx context.Context) error {
 		p.cond.L.Unlock()
 		return ErrClosedPool
 	}
+	p.destructWG.Add(1)
 	p.cond.L.Unlock()
 
 	value, err := p.constructResourceValue(ctx)
 	if err != nil {
+		p.destructWG.Done()
 		return err
 	}
 
@@ -511,7 +513,6 @@ func (p *Pool[T]) CreateResource(ctx context.Context) error {
 		lastUsedNano:   nanotime(),
 		poolResetCount: p.resetCount,
 	}
-	p.destructWG.Add(1)
 
 	p.cond.L.Lock()
 	// If closed while constructing resource then destroy it and return an error
