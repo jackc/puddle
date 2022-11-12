@@ -427,8 +427,12 @@ func (p *Pool[T]) initResourceValue(ctx context.Context, res *Resource[T]) (*Res
 			return
 		}
 
+		// The resource is already in p.allResources where it might be read. So we need to acquire the lock to update its
+		// status.
+		p.mux.Lock()
 		res.value = value
 		res.status = resourceStatusAcquired
+		p.mux.Unlock()
 
 		// This select works because the channel is unbuffered.
 		select {

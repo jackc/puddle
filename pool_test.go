@@ -985,6 +985,11 @@ func TestStress(t *testing.T) {
 				res.Release()
 			}
 		},
+		// Stat
+		func() {
+			stat := pool.Stat()
+			assert.NotNil(t, stat)
+		},
 	}
 
 	workerCount := int(poolSize) * 2
