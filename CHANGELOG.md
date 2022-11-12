@@ -1,3 +1,7 @@
+# 2.1.2 (November 12, 2022)
+
+* Restore support to Go 1.18 via go.uber.org/atomic
+
 # 2.1.1 (November 11, 2022)
 
 * Fix create resource concurrently with Stat call race
