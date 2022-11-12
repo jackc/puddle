@@ -1,3 +1,7 @@
+# 2.1.1 (November 11, 2022)
+
+* Fix create resource concurrently with Stat call race
+
 # 2.1.0 (October 28, 2022)
 
 * Concurrency control is now implemented with a semaphore. This simplifies some internal logic, resolves a few error conditions (including a deadlock), and improves performance. (Jan Dubsky)
