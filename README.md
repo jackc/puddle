@@ -15,7 +15,7 @@ own.
 
 * Acquire cancellation via context standard library
 * Statistics API for monitoring pool pressure
-* ~~No dependencies outside of standard library~~ (uses go.uber.org/atomic until Go 1.19 atomics can be used)
+* No dependencies outside of standard library and golang.org/x/sync
 * High performance
 * 100% test coverage of reachable code
 
@@ -73,7 +73,7 @@ Puddle is stable and feature complete.
 
 ## Supported Go Versions
 
-puddle supports the same versions of Go that are supported by the Go project. For [Go](https://golang.org/doc/devel/release.html#policy) that is the two most recent major releases. This means puddle supports Go 1.18 and higher.
+puddle supports the same versions of Go that are supported by the Go project. For [Go](https://golang.org/doc/devel/release.html#policy) that is the two most recent major releases. This means puddle supports Go 1.19 and higher.
 
 ## License
 

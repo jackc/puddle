@@ -1,3 +1,7 @@
+# 2.2.0 (February 11, 2023)
+
+* Use Go 1.19 atomics and drop go.uber.org/atomic dependency
+
 # 2.1.2 (November 12, 2022)
 
 * Restore support to Go 1.18 via go.uber.org/atomic
