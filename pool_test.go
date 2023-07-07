@@ -448,6 +448,28 @@ func TestPoolCreateResourceReturnsErrorWhenClosedWhileCreatingResource(t *testin
 	assert.Equal(t, puddle.ErrClosedPool, err)
 }
 
+func TestPoolCreateResourceReturnsErrorWhenPoolFull(t *testing.T) {
+	constructor, _ := createConstructor()
+	pool, err := puddle.NewPool(&puddle.Config[int]{Constructor: constructor, Destructor: stubDestructor, MaxSize: 2})
+	require.NoError(t, err)
+	defer pool.Close()
+
+	err = pool.CreateResource(context.Background())
+	require.NoError(t, err)
+
+	stats := pool.Stat()
+	assert.EqualValues(t, 1, stats.IdleResources())
+
+	err = pool.CreateResource(context.Background())
+	require.NoError(t, err)
+
+	stats = pool.Stat()
+	assert.EqualValues(t, 2, stats.IdleResources())
+
+	err = pool.CreateResource(context.Background())
+	require.Error(t, err)
+}
+
 func TestPoolCloseClosesAllIdleResources(t *testing.T) {
 	constructor, _ := createConstructor()
 
@@ -989,6 +1011,13 @@ func TestStress(t *testing.T) {
 		func() {
 			stat := pool.Stat()
 			assert.NotNil(t, stat)
+		},
+		// CreateResource
+		func() {
+			err := pool.CreateResource(context.Background())
+			if err != nil && !errors.Is(err, puddle.ErrClosedPool) && !errors.Is(err, puddle.ErrNotAvailable) {
+				t.Error(err)
+			}
 		},
 	}
 
