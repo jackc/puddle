@@ -4,11 +4,11 @@ import (
 	"context"
 	"errors"
 	"sync"
-	"sync/atomic"
 	"time"
 
-	"github.com/jackc/puddle/v2/internal/genstack"
 	"golang.org/x/sync/semaphore"
+
+	"github.com/jackc/puddle/v2/internal/genstack"
 )
 
 const (
@@ -132,14 +132,11 @@ type Pool[T any] struct {
 	allResources  resList[T]
 	idleResources *genstack.GenStack[*Resource[T]]
 
+	metrics *Metrics
+
 	constructor Constructor[T]
 	destructor  Destructor[T]
 	maxSize     int32
-
-	acquireCount         int64
-	acquireDuration      time.Duration
-	emptyAcquireCount    int64
-	canceledAcquireCount atomic.Int64
 
 	resetCount int
 
@@ -149,6 +146,7 @@ type Pool[T any] struct {
 }
 
 type Config[T any] struct {
+	Metrics     *Metrics
 	Constructor Constructor[T]
 	Destructor  Destructor[T]
 	MaxSize     int32
@@ -160,17 +158,22 @@ func NewPool[T any](config *Config[T]) (*Pool[T], error) {
 		return nil, errors.New("MaxSize must be >= 1")
 	}
 
-	baseAcquireCtx, cancelBaseAcquireCtx := context.WithCancel(context.Background())
+	p := &Pool[T]{
+		acquireSem:    semaphore.NewWeighted(int64(config.MaxSize)),
+		idleResources: genstack.NewGenStack[*Resource[T]](),
+		maxSize:       config.MaxSize,
+		constructor:   config.Constructor,
+		destructor:    config.Destructor,
+		metrics:       config.Metrics,
+	}
 
-	return &Pool[T]{
-		acquireSem:           semaphore.NewWeighted(int64(config.MaxSize)),
-		idleResources:        genstack.NewGenStack[*Resource[T]](),
-		maxSize:              config.MaxSize,
-		constructor:          config.Constructor,
-		destructor:           config.Destructor,
-		baseAcquireCtx:       baseAcquireCtx,
-		cancelBaseAcquireCtx: cancelBaseAcquireCtx,
-	}, nil
+	p.baseAcquireCtx, p.cancelBaseAcquireCtx = context.WithCancel(context.Background())
+
+	if p.metrics == nil {
+		p.metrics = NewMetrics()
+	}
+
+	return p, nil
 }
 
 // Close destroys all resources in the pool and rejects future Acquire calls.
@@ -264,10 +267,10 @@ func (p *Pool[T]) Stat() *Stat {
 
 	s := &Stat{
 		maxResources:         p.maxSize,
-		acquireCount:         p.acquireCount,
-		emptyAcquireCount:    p.emptyAcquireCount,
-		canceledAcquireCount: p.canceledAcquireCount.Load(),
-		acquireDuration:      p.acquireDuration,
+		acquireCount:         p.metrics.acquireCount,
+		emptyAcquireCount:    p.metrics.emptyAcquireCount,
+		canceledAcquireCount: p.metrics.canceledAcquireCount.Load(),
+		acquireDuration:      p.metrics.acquireDuration,
 	}
 
 	for _, res := range p.allResources {
@@ -329,7 +332,7 @@ func (p *Pool[T]) createNewResource() *Resource[T] {
 func (p *Pool[T]) Acquire(ctx context.Context) (_ *Resource[T], err error) {
 	select {
 	case <-ctx.Done():
-		p.canceledAcquireCount.Add(1)
+		p.metrics.observeAcquireCancel()
 		return nil, ctx.Err()
 	default:
 	}
@@ -349,7 +352,7 @@ func (p *Pool[T]) acquire(ctx context.Context) (*Resource[T], error) {
 		waitedForLock = true
 		err := p.acquireSem.Acquire(ctx, 1)
 		if err != nil {
-			p.canceledAcquireCount.Add(1)
+			p.metrics.observeAcquireCancel()
 			return nil, err
 		}
 	}
@@ -363,11 +366,8 @@ func (p *Pool[T]) acquire(ctx context.Context) (*Resource[T], error) {
 
 	// If a resource is available in the pool.
 	if res := p.tryAcquireIdleResource(); res != nil {
-		if waitedForLock {
-			p.emptyAcquireCount += 1
-		}
-		p.acquireCount += 1
-		p.acquireDuration += time.Duration(nanotime() - startNano)
+		d := time.Duration(nanotime() - startNano)
+		p.metrics.observeAcquireDuration(d, waitedForLock)
 		p.mux.Unlock()
 		return res, nil
 	}
@@ -389,9 +389,8 @@ func (p *Pool[T]) acquire(ctx context.Context) (*Resource[T], error) {
 	p.mux.Lock()
 	defer p.mux.Unlock()
 
-	p.emptyAcquireCount += 1
-	p.acquireCount += 1
-	p.acquireDuration += time.Duration(nanotime() - startNano)
+	d := time.Duration(nanotime() - startNano)
+	p.metrics.observeAcquireDuration(d, true)
 
 	return res, nil
 }
@@ -444,7 +443,7 @@ func (p *Pool[T]) initResourceValue(ctx context.Context, res *Resource[T]) (*Res
 
 	select {
 	case <-ctx.Done():
-		p.canceledAcquireCount.Add(1)
+		p.metrics.observeAcquireCancel()
 		return nil, ctx.Err()
 	case err := <-constructErrChan:
 		if err != nil {
@@ -472,7 +471,7 @@ func (p *Pool[T]) TryAcquire(ctx context.Context) (*Resource[T], error) {
 
 	// If a resource is available now
 	if res := p.tryAcquireIdleResource(); res != nil {
-		p.acquireCount += 1
+		p.metrics.observeAcquireDuration(0, false)
 		return res, nil
 	}
 
