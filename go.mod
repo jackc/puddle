@@ -4,8 +4,8 @@ go 1.19
 
 require (
 	github.com/prometheus/client_golang v1.17.0
-	github.com/stretchr/testify v1.8.1
-	golang.org/x/sync v0.3.0
+	github.com/stretchr/testify v1.8.4
+	golang.org/x/sync v0.5.0
 )
 
 require (
