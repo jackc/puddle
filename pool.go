@@ -413,7 +413,7 @@ func (p *Pool[T]) initResourceValue(ctx context.Context, res *Resource[T]) (*Res
 
 			// The resource won't be acquired because its
 			// construction failed. We have to allow someone else to
-			// take that resouce.
+			// take that resource.
 			p.acquireSem.Release(1)
 			p.mux.Unlock()
 
@@ -651,7 +651,7 @@ func (p *Pool[T]) Reset() {
 	}
 }
 
-// releaseAcquiredResource returns res to the the pool.
+// releaseAcquiredResource returns res to the pool.
 func (p *Pool[T]) releaseAcquiredResource(res *Resource[T], lastUsedNano int64) {
 	p.mux.Lock()
 	defer p.mux.Unlock()
