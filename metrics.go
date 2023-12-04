@@ -1,12 +1,14 @@
 package puddle
 
 import (
-	"strconv"
 	"sync/atomic"
 	"time"
-
-	"github.com/prometheus/client_golang/prometheus"
 )
+
+// AcquireObserver is called after successful resource acquisition.
+// When using AcquireObserver, make sure it executes as possible in
+// order not to downgrade overall pool performance.
+type AcquireObserver func(d time.Duration, isEmptyAcquire bool)
 
 // Metrics hold puddle metrics.
 type Metrics struct {
@@ -14,8 +16,9 @@ type Metrics struct {
 	acquireDuration      time.Duration
 	emptyAcquireCount    int64
 	canceledAcquireCount atomic.Int64
-	// acquireDurationHistogram can be nil
-	acquireDurationHistogram *prometheus.HistogramVec
+	// externalAcquireObserver is an optional callback func that user
+	// may pass to enable extended monitoring, e.g. prom histogram measurement.
+	externalAcquireObserver AcquireObserver
 }
 
 func NewMetrics(opts ...MetricsOption) *Metrics {
@@ -26,6 +29,10 @@ func NewMetrics(opts ...MetricsOption) *Metrics {
 	return &m
 }
 
+func (m *Metrics) observeAcquireCancel() {
+	m.canceledAcquireCount.Add(1)
+}
+
 func (m *Metrics) observeAcquireDuration(d time.Duration, isEmptyAcquire bool) {
 	m.acquireCount++
 	m.acquireDuration += d
@@ -33,55 +40,14 @@ func (m *Metrics) observeAcquireDuration(d time.Duration, isEmptyAcquire bool) {
 		m.emptyAcquireCount++
 	}
 
-	if m.acquireDurationHistogram != nil {
-		m.acquireDurationHistogram.
-			WithLabelValues(strconv.FormatBool(isEmptyAcquire)).
-			Observe(float64(d.Nanoseconds()))
+	if m.externalAcquireObserver != nil {
+		m.externalAcquireObserver(d, isEmptyAcquire)
 	}
-}
-
-func (m *Metrics) observeAcquireCancel() {
-	m.canceledAcquireCount.Add(1)
 }
 
 type MetricsOption func(m *Metrics)
 
-// WithAcquireDurationHistogram turns on recording of pool resource acquire duration.
-// Histogram metrics can be very expensive for Prometheus to retain and query.
-func WithAcquireDurationHistogram(reg prometheus.Registerer, opts ...HistogramOption) MetricsOption {
-	return func(m *Metrics) {
-		histOpts := prometheus.HistogramOpts{
-			Name:    "puddle_acquire_duration_nanoseconds",
-			Help:    "Histogram of a pool resource acquire duration (nanoseconds).",
-			Buckets: prometheus.DefBuckets,
-		}
-		for _, o := range opts {
-			o(&histOpts)
-		}
-
-		m.acquireDurationHistogram = prometheus.NewHistogramVec(histOpts, []string{"empty"})
-		reg.MustRegister(m.acquireDurationHistogram)
-	}
-}
-
-// A HistogramOption lets you add options to Histogram metrics using With* funcs.
-type HistogramOption func(*prometheus.HistogramOpts)
-
-// WithHistogramBuckets allows you to specify custom bucket ranges for histograms.
-func WithHistogramBuckets(buckets []float64) HistogramOption {
-	return func(o *prometheus.HistogramOpts) { o.Buckets = buckets }
-}
-
-// WithHistogramConstLabels allows you to add custom ConstLabels to histograms metrics.
-func WithHistogramConstLabels(labels prometheus.Labels) HistogramOption {
-	return func(o *prometheus.HistogramOpts) {
-		o.ConstLabels = labels
-	}
-}
-
-// WithHistogramSubsystem allows you to add a Subsystem to histograms metrics.
-func WithHistogramSubsystem(subsystem string) HistogramOption {
-	return func(o *prometheus.HistogramOpts) {
-		o.Subsystem = subsystem
-	}
+// WithExternalAcquireObserver sets optional callback function for duration observation.
+func WithExternalAcquireObserver(observer AcquireObserver) MetricsOption {
+	return func(m *Metrics) { m.externalAcquireObserver = observer }
 }
