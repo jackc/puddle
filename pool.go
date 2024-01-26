@@ -154,7 +154,7 @@ type Config[T any] struct {
 	MaxSize     int32
 }
 
-// NewPool creates a new pool. Panics if maxSize is less than 1.
+// NewPool creates a new pool. Returns an error iff MaxSize is less than 1.
 func NewPool[T any](config *Config[T]) (*Pool[T], error) {
 	if config.MaxSize < 1 {
 		return nil, errors.New("MaxSize must be >= 1")
