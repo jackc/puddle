@@ -682,6 +682,7 @@ func TestPoolStatSuccessfulAcquireCounters(t *testing.T) {
 	assert.Equal(t, int64(1), stat.AcquireCount())
 	assert.Equal(t, int64(1), stat.EmptyAcquireCount())
 	assert.True(t, stat.AcquireDuration() > 0, "expected stat.AcquireDuration() > 0 but %v", stat.AcquireDuration())
+	assert.Equal(t, stat.EmptyAcquireWaitTime(), stat.AcquireDuration())
 	lastAcquireDuration := stat.AcquireDuration()
 
 	res, err = pool.Acquire(context.Background())
@@ -692,6 +693,7 @@ func TestPoolStatSuccessfulAcquireCounters(t *testing.T) {
 	assert.Equal(t, int64(2), stat.AcquireCount())
 	assert.Equal(t, int64(1), stat.EmptyAcquireCount())
 	assert.True(t, stat.AcquireDuration() > lastAcquireDuration)
+	assert.True(t, stat.EmptyAcquireWaitTime() < stat.AcquireDuration())
 	lastAcquireDuration = stat.AcquireDuration()
 
 	wg := &sync.WaitGroup{}
@@ -712,6 +714,7 @@ func TestPoolStatSuccessfulAcquireCounters(t *testing.T) {
 	assert.Equal(t, int64(4), stat.AcquireCount())
 	assert.Equal(t, int64(2), stat.EmptyAcquireCount())
 	assert.True(t, stat.AcquireDuration() > lastAcquireDuration)
+	assert.True(t, stat.EmptyAcquireWaitTime() < stat.AcquireDuration())
 	lastAcquireDuration = stat.AcquireDuration()
 }
 
