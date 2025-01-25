@@ -75,6 +75,20 @@ Puddle is stable and feature complete.
 
 puddle supports the same versions of Go that are supported by the Go project. For [Go](https://golang.org/doc/devel/release.html#policy) that is the two most recent major releases. This means puddle supports Go 1.19 and higher.
 
+## Differences with Go sync.Pool
+
+They are intended for entirely different types of resources:
+* [sync.Pool](https://pkg.go.dev/sync#Pool) would generally be used for in memory objects.
+* Puddle would generally be used for handles to external objects such as connections, file handles, etc.
+
+Here are the difference if you want to go into the detail
+* sync.Pool does not have a way to limit max resources in pool.
+* sync.Pool does not have a way to ensure at least min resources in pool.
+* sync.Pool can drop resources in pool at any time - not ideal for expensive to create connections.
+* sync.Pool does not have a cleanup / release function. Resources are GCed without a chance to close cleanly.
+* sync.Pool does not have a way to handle errors creating the resource
+* sync.Pool does not support context to limit time to wait creating a resource
+
 ## License
 
 MIT
