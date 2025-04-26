@@ -5,14 +5,6 @@ import (
 	"time"
 )
 
-type traceCtxKey int
-
-const (
-	_ traceCtxKey = iota
-	acquireSpan
-	releaseSpan
-)
-
 // Tracer traces pool actions.
 type Tracer interface {
 	// AcquireStart is called at the beginning of Acquire calls. The return

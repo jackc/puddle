@@ -40,7 +40,6 @@ type Resource[T any] struct {
 	lastUsedNano   int64
 	poolResetCount int
 	status         byte
-	traceCtx       context.Context
 }
 
 // Value returns the resource value.
