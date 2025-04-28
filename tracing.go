@@ -29,8 +29,6 @@ type AcquireEndData struct {
 	Err             error
 }
 
-type ReleaseTracer interface{}
-
 type ReleaseStartData struct {
 	HeldDuration time.Duration
 }
