@@ -12,7 +12,7 @@ type Tracer interface {
 	AcquireStart(ctx context.Context, data AcquireStartData) context.Context
 	AcquireEnd(ctx context.Context, data AcquireEndData)
 	// ReleaseStart is called at the beginning of Release calls. The return
-	// context is used for the rest of the call and will be passed to AcquireEnd
+	// context is used for the rest of the call and will be passed to ReleaseEnd
 	ReleaseStart(ctx context.Context, data ReleaseStartData) context.Context
 	ReleaseEnd(ctx context.Context, data ReleaseEndData)
 }
