@@ -380,6 +380,7 @@ func (p *Pool[T]) acquire(ctx context.Context) (*Resource[T], error) {
 	}
 
 	var waitedForLock bool
+	var waitTime time.Duration
 	if !p.acquireSem.TryAcquire(1) {
 		waitedForLock = true
 		err := p.acquireSem.Acquire(ctx, 1)
@@ -400,17 +401,12 @@ func (p *Pool[T]) acquire(ctx context.Context) (*Resource[T], error) {
 
 	// If a resource is available in the pool.
 	if res := p.tryAcquireIdleResource(); res != nil {
-		waitTime := time.Duration(nanotime() - startNano)
+		waitTime = time.Duration(nanotime() - startNano)
 		if waitedForLock {
-			defer trace.acquireEnd(ctx, waitTime, res.traceStats, false)
 			p.emptyAcquireCount += 1
 			p.emptyAcquireWaitTime += waitTime
-		} else {
-			// TODO(draft): this else block is an artifact of waitTime being
-			// tracked separately as a metric. If this PR ends up removing
-			// metrics altogether, this will be a bit simpler.
-			defer trace.acquireEnd(ctx, 0, res.traceStats, false)
 		}
+		defer trace.acquireEnd(ctx, waitTime, res.traceStats, false)
 		p.acquireCount += 1
 		p.acquireDuration += waitTime
 		p.mux.Unlock()
@@ -431,18 +427,14 @@ func (p *Pool[T]) acquire(ctx context.Context) (*Resource[T], error) {
 		defer trace.acquireEndErr(ctx, err)
 		return nil, err
 	}
-	if waitedForLock {
-		defer trace.acquireEnd(ctx, time.Duration(nanotime()-startNano), res.traceStats, true)
-	} else {
-		defer trace.acquireEnd(ctx, 0, res.traceStats, true)
-	}
 
 	p.mux.Lock()
 	defer p.mux.Unlock()
 
 	p.emptyAcquireCount += 1
 	p.acquireCount += 1
-	waitTime := time.Duration(nanotime() - startNano)
+	waitTime = time.Duration(nanotime() - startNano)
+	defer trace.acquireEnd(ctx, waitTime, res.traceStats, true)
 	p.acquireDuration += waitTime
 	p.emptyAcquireWaitTime += waitTime
 
