@@ -20,6 +20,31 @@ import (
 	"golang.org/x/sync/semaphore"
 )
 
+// TODO(draft) This is just to demo.
+// Will do testable example for final PR.
+type testLogTracer struct {
+	puddle.BaseTracer
+	t *testing.T
+}
+
+func (t *testLogTracer) Logf(format string, a ...any) {
+	t.t.Helper()
+	t.t.Logf(format, a...)
+}
+
+func (t *testLogTracer) AcquireEnd(ctx context.Context, data puddle.AcquireEndData) {
+	t.t.Helper()
+	if data.Err != nil {
+		t.Logf("Acquire error after %v: %v", data.AcquireDuration, data.Err)
+		return
+	}
+	if data.InitDuration > 0 {
+		t.Logf("got new resource after %v. blocked for %v, init took: %v", data.AcquireDuration, data.WaitDuration, data.InitDuration)
+		return
+	}
+	t.Logf("got pooled resource after %v. blocked for %v, resource is %v old and has been idle for %v", data.AcquireDuration, data.WaitDuration, time.Since(data.ResourceStats.CreationTime), data.ResourceStats.IdleDuration)
+}
+
 type Counter struct {
 	mutex sync.Mutex
 	n     int
@@ -218,7 +243,14 @@ func TestPoolAcquireCreatesResourceRespectingContext(t *testing.T) {
 
 func TestPoolAcquireReusesResources(t *testing.T) {
 	constructor, createCounter := createConstructor()
-	pool, err := puddle.NewPool(&puddle.Config[int]{Constructor: constructor, Destructor: stubDestructor, MaxSize: 10})
+	pool, err := puddle.NewPool(&puddle.Config[int]{
+		Constructor: constructor,
+		Destructor:  stubDestructor,
+		MaxSize:     10,
+		Tracer: &testLogTracer{
+			t: t,
+		},
+	})
 	require.NoError(t, err)
 
 	res, err := pool.Acquire(context.Background())
@@ -328,7 +360,14 @@ func TestPoolAcquireContextCanceledDuringCreate(t *testing.T) {
 		}
 		return constructorCalls.Next(), nil
 	}
-	pool, err := puddle.NewPool(&puddle.Config[int]{Constructor: constructor, Destructor: stubDestructor, MaxSize: 10})
+	pool, err := puddle.NewPool(&puddle.Config[int]{
+		Constructor: constructor,
+		Destructor:  stubDestructor,
+		MaxSize:     10,
+		Tracer: &testLogTracer{
+			t: t,
+		},
+	})
 	require.NoError(t, err)
 
 	res, err := pool.Acquire(ctx)
@@ -1173,7 +1212,6 @@ func startAcceptOnceDummyServer(laddr string) {
 			}
 		}
 	}()
-
 }
 
 func ExamplePool() {
