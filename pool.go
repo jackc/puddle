@@ -19,7 +19,7 @@ const (
 	resourceStatusHijacked     = iota
 )
 
-// ErrClosedPool occurs on an attempt to acquire a connection from a closed pool
+// ErrClosedPool occurs on an attempt to acquire a resource from a closed pool
 // or a pool that is closed while the acquire is waiting.
 var ErrClosedPool = errors.New("closed pool")
 
@@ -59,7 +59,7 @@ func (res *Resource[T]) Release() {
 	res.pool.releaseAcquiredResource(res, nanotime())
 }
 
-// ReleaseUnused returns the resource to the pool without updating when it was last used used. i.e. LastUsedNanotime
+// ReleaseUnused returns the resource to the pool without updating when it was last used. i.e. LastUsedNanotime
 // will not change. res must not be subsequently used.
 func (res *Resource[T]) ReleaseUnused() {
 	if res.status != resourceStatusAcquired {
@@ -106,7 +106,7 @@ func (res *Resource[T]) LastUsedNanotime() int64 {
 }
 
 // IdleDuration returns the duration since Release was last called on the resource. This is equivalent to subtracting
-// LastUsedNanotime to the current nanotime.
+// LastUsedNanotime from the current nanotime.
 func (res *Resource[T]) IdleDuration() time.Duration {
 	if !(res.status == resourceStatusAcquired || res.status == resourceStatusHijacked) {
 		panic("tried to access resource that is not acquired or hijacked")
@@ -545,7 +545,7 @@ func (p *Pool[T]) TryAcquire(ctx context.Context) (*Resource[T], error) {
 // upstream. https://github.com/golang/sync/pull/19
 func acquireSemAll(sem *semaphore.Weighted, num int) int {
 	if num <= 0 {
-		panic("aquireSemAll: num <= 0")
+		panic("acquireSemAll: num <= 0")
 	}
 	if sem.TryAcquire(int64(num)) {
 		return num
