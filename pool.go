@@ -158,6 +158,9 @@ type Config[T any] struct {
 
 // NewPool creates a new pool. Returns an error iff MaxSize is less than 1.
 func NewPool[T any](config *Config[T]) (*Pool[T], error) {
+	if config == nil {
+		return nil, errors.New("config must not be nil")
+	}
 	if config.MaxSize < 1 {
 		return nil, errors.New("MaxSize must be >= 1")
 	}
