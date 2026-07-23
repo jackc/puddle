@@ -27,6 +27,9 @@ var ErrClosedPool = errors.New("closed pool")
 // that is at maximum capacity and has no available resources.
 var ErrNotAvailable = errors.New("resource not available")
 
+// errNilPool is returned when a method is called on a nil Pool.
+var errNilPool = errors.New("puddle: nil Pool")
+
 // Constructor is a function called by the pool to construct a resource.
 type Constructor[T any] func(ctx context.Context) (res T, err error)
 
@@ -338,6 +341,9 @@ func (p *Pool[T]) createNewResource() *Resource[T] {
 // the problem of it being impossible to create resources when the time to create a resource is greater than any one
 // caller of Acquire is willing to wait.
 func (p *Pool[T]) Acquire(ctx context.Context) (_ *Resource[T], err error) {
+	if p == nil {
+		return nil, errNilPool
+	}
 	select {
 	case <-ctx.Done():
 		p.canceledAcquireCount.Add(1)
