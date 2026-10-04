@@ -285,6 +285,130 @@ func TestPoolTryAcquireWithFailedResourceCreate(t *testing.T) {
 	assert.Nil(t, res)
 }
 
+func TestPoolTryAcquireDestroysResourceConstructedAfterClose(t *testing.T) {
+	constructionStarted := make(chan struct{})
+	finishConstruction := make(chan struct{})
+	destructionStarted := make(chan struct{})
+	finishDestruction := make(chan struct{})
+	var acquireCtx context.Context
+	var constructorCalls Counter
+	var destructorCalls Counter
+	constructor := func(ctx context.Context) (int, error) {
+		value := constructorCalls.Next()
+		if value == 1 {
+			acquireCtx = ctx
+		} else {
+			close(constructionStarted)
+			<-finishConstruction
+		}
+		return value, nil
+	}
+	destructor := func(value int) {
+		if value == 2 {
+			close(destructionStarted)
+			<-finishDestruction
+		}
+		destructorCalls.Next()
+	}
+	pool, err := puddle.NewPool(&puddle.Config[int]{Constructor: constructor, Destructor: destructor, MaxSize: 2})
+	require.NoError(t, err)
+
+	res, err := pool.Acquire(context.Background())
+	require.NoError(t, err)
+	var releaseOnce, constructionOnce, destructionOnce sync.Once
+	closeFinished := make(chan struct{})
+	t.Cleanup(func() {
+		constructionOnce.Do(func() { close(finishConstruction) })
+		destructionOnce.Do(func() { close(finishDestruction) })
+		releaseOnce.Do(res.Release)
+		pool.Reset()
+	})
+
+	backgroundRes, err := pool.TryAcquire(context.Background())
+	require.ErrorIs(t, err, puddle.ErrNotAvailable)
+	require.Nil(t, backgroundRes)
+	<-constructionStarted
+
+	go func() {
+		pool.Close()
+		close(closeFinished)
+	}()
+	// Acquire's constructor context is canceled when Close marks the pool closed.
+	select {
+	case <-acquireCtx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("Close did not cancel the pool context")
+	}
+	releaseOnce.Do(res.Release)
+	constructionOnce.Do(func() { close(finishConstruction) })
+
+	select {
+	case <-destructionStarted:
+	case <-time.After(time.Second):
+		t.Fatal("resource constructed after Close was not destroyed")
+	}
+	assert.Zero(t, pool.Stat().TotalResources())
+	select {
+	case <-closeFinished:
+		t.Fatal("Close returned before destruction finished")
+	default:
+	}
+	destructionOnce.Do(func() { close(finishDestruction) })
+	select {
+	case <-closeFinished:
+	case <-time.After(time.Second):
+		t.Fatal("Close did not return after destruction finished")
+	}
+	assert.Equal(t, 2, destructorCalls.Value())
+}
+
+func TestPoolTryAcquireDestroysResourceConstructedBeforeReset(t *testing.T) {
+	constructionStarted := make(chan struct{})
+	finishConstruction := make(chan struct{})
+	destroyed := make(chan int, 2)
+	var constructorCalls Counter
+	constructor := func(context.Context) (int, error) {
+		value := constructorCalls.Next()
+		if value == 1 {
+			close(constructionStarted)
+			<-finishConstruction
+		}
+		return value, nil
+	}
+	pool, err := puddle.NewPool(&puddle.Config[int]{
+		Constructor: constructor,
+		Destructor:  func(value int) { destroyed <- value },
+		MaxSize:     1,
+	})
+	require.NoError(t, err)
+	var constructionOnce sync.Once
+	t.Cleanup(func() {
+		constructionOnce.Do(func() { close(finishConstruction) })
+		pool.Close()
+	})
+
+	res, err := pool.TryAcquire(context.Background())
+	require.ErrorIs(t, err, puddle.ErrNotAvailable)
+	require.Nil(t, res)
+	<-constructionStarted
+	pool.Reset()
+	constructionOnce.Do(func() { close(finishConstruction) })
+
+	select {
+	case value := <-destroyed:
+		assert.Equal(t, 1, value)
+	case <-time.After(time.Second):
+		t.Fatal("resource constructed before Reset was not destroyed")
+	}
+	assert.Zero(t, pool.Stat().TotalResources())
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	res, err = pool.Acquire(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 2, res.Value())
+	res.Release()
+}
+
 func TestPoolAcquireNilContextDoesNotLeavePoolLocked(t *testing.T) {
 	constructor, createCounter := createConstructor()
 	pool, err := puddle.NewPool(&puddle.Config[int]{Constructor: constructor, Destructor: stubDestructor, MaxSize: 10})

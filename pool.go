@@ -514,6 +514,11 @@ func (p *Pool[T]) TryAcquire(ctx context.Context) (*Resource[T], error) {
 		}
 
 		res.value = value
+		if p.closed || res.poolResetCount != p.resetCount {
+			p.allResources.remove(res)
+			go p.destructResourceValue(value)
+			return
+		}
 		res.status = resourceStatusIdle
 		p.idleResources.Push(res)
 	}()
