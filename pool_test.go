@@ -1429,7 +1429,8 @@ func BenchmarkPoolAcquireAndRelease(b *testing.B) {
 					for j := 0; j < b.N; j++ {
 						res, err := pool.Acquire(ctx)
 						if err != nil {
-							b.Fatal(err)
+							b.Error(err)
+							return
 						}
 						res.Release()
 					}
