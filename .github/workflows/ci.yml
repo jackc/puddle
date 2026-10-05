@@ -14,17 +14,20 @@ jobs:
 
     strategy:
       matrix:
-        go-version: ["1.19", "1.20"]
+        go-version: ["1.19.x", "oldstable", "stable"]
 
     steps:
 
-    - name: Set up Go 1.x
-      uses: actions/setup-go@v2
+    - name: Check out code into the Go module directory
+      uses: actions/checkout@v7
+
+    - name: Set up Go
+      uses: actions/setup-go@v7
       with:
         go-version: ${{ matrix.go-version }}
 
-    - name: Check out code into the Go module directory
-      uses: actions/checkout@v2
+    - name: Vet
+      run: go vet ./...
 
     - name: Test
       run: go test -v -race ./...
