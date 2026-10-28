@@ -115,6 +115,18 @@ func (res *Resource[T]) IdleDuration() time.Duration {
 	return time.Duration(nanotime() - res.lastUsedNano)
 }
 
+type ResourceTraceStats struct {
+	CreationTime time.Time
+	IdleDuration time.Duration
+}
+
+func (res *Resource[T]) traceStats() ResourceTraceStats {
+	return ResourceTraceStats{
+		CreationTime: res.CreationTime(),
+		IdleDuration: res.IdleDuration(),
+	}
+}
+
 // Pool is a concurrency-safe resource pool.
 type Pool[T any] struct {
 	// mux is the pool internal lock. Any modification of shared state of
@@ -136,6 +148,7 @@ type Pool[T any] struct {
 	constructor Constructor[T]
 	destructor  Destructor[T]
 	maxSize     int32
+	tracer      Tracer
 
 	acquireCount         int64
 	acquireDuration      time.Duration
@@ -154,6 +167,7 @@ type Config[T any] struct {
 	Constructor Constructor[T]
 	Destructor  Destructor[T]
 	MaxSize     int32
+	Tracer      Tracer
 }
 
 // NewPool creates a new pool. Returns an error iff MaxSize is less than 1.
@@ -168,6 +182,7 @@ func NewPool[T any](config *Config[T]) (*Pool[T], error) {
 		acquireSem:           semaphore.NewWeighted(int64(config.MaxSize)),
 		idleResources:        genstack.NewGenStack[*Resource[T]](),
 		maxSize:              config.MaxSize,
+		tracer:               config.Tracer,
 		constructor:          config.Constructor,
 		destructor:           config.Destructor,
 		baseAcquireCtx:       baseAcquireCtx,
@@ -353,13 +368,25 @@ func (p *Pool[T]) Acquire(ctx context.Context) (_ *Resource[T], err error) {
 //
 // This function exists solely only for benchmarking purposes.
 func (p *Pool[T]) acquire(ctx context.Context) (*Resource[T], error) {
+	var trace tracerSpan
 	startNano := nanotime()
+	if p.tracer != nil {
+		ctx = p.tracer.AcquireStart(ctx, AcquireStartData{
+			StartNano: startNano,
+		})
+		trace = tracerSpan{
+			t:     p.tracer,
+			start: startNano,
+		}
+	}
 
 	var waitedForLock bool
+	var waitTime time.Duration
 	if !p.acquireSem.TryAcquire(1) {
 		waitedForLock = true
 		err := p.acquireSem.Acquire(ctx, 1)
 		if err != nil {
+			defer trace.acquireEndErr(ctx, err)
 			p.canceledAcquireCount.Add(1)
 			return nil, err
 		}
@@ -367,6 +394,7 @@ func (p *Pool[T]) acquire(ctx context.Context) (*Resource[T], error) {
 
 	p.mux.Lock()
 	if p.closed {
+		defer trace.acquireEndErr(ctx, ErrClosedPool)
 		p.acquireSem.Release(1)
 		p.mux.Unlock()
 		return nil, ErrClosedPool
@@ -374,11 +402,12 @@ func (p *Pool[T]) acquire(ctx context.Context) (*Resource[T], error) {
 
 	// If a resource is available in the pool.
 	if res := p.tryAcquireIdleResource(); res != nil {
-		waitTime := time.Duration(nanotime() - startNano)
+		waitTime = time.Duration(nanotime() - startNano)
 		if waitedForLock {
 			p.emptyAcquireCount += 1
 			p.emptyAcquireWaitTime += waitTime
 		}
+		defer trace.acquireEnd(ctx, waitTime, res.traceStats, false)
 		p.acquireCount += 1
 		p.acquireDuration += waitTime
 		p.mux.Unlock()
@@ -396,6 +425,7 @@ func (p *Pool[T]) acquire(ctx context.Context) (*Resource[T], error) {
 
 	res, err := p.initResourceValue(ctx, res)
 	if err != nil {
+		defer trace.acquireEndErr(ctx, err)
 		return nil, err
 	}
 
@@ -404,7 +434,8 @@ func (p *Pool[T]) acquire(ctx context.Context) (*Resource[T], error) {
 
 	p.emptyAcquireCount += 1
 	p.acquireCount += 1
-	waitTime := time.Duration(nanotime() - startNano)
+	waitTime = time.Duration(nanotime() - startNano)
+	defer trace.acquireEnd(ctx, waitTime, res.traceStats, true)
 	p.acquireDuration += waitTime
 	p.emptyAcquireWaitTime += waitTime
 
