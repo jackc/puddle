@@ -9,9 +9,9 @@ import (
 	"net"
 	"os"
 	"runtime"
-	"strconv"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/jackc/puddle/v2"
@@ -102,24 +102,28 @@ func TestPoolAcquireCallsConstructorWithAcquireContextValuesButNotDeadline(t *te
 }
 
 func TestPoolAcquireCalledConstructorIsNotCanceledByAcquireCancellation(t *testing.T) {
-	constructor := func(ctx context.Context) (int, error) {
-		time.Sleep(100 * time.Millisecond)
-		return 1, nil
-	}
-	pool, err := puddle.NewPool(&puddle.Config[int]{Constructor: constructor, Destructor: stubDestructor, MaxSize: 10})
-	require.NoError(t, err)
-	defer pool.Close()
+	synctest.Test(t, func(t *testing.T) {
+		constructor := func(ctx context.Context) (int, error) {
+			time.Sleep(100 * time.Millisecond)
+			return 1, ctx.Err()
+		}
+		pool, err := puddle.NewPool(&puddle.Config[int]{Constructor: constructor, Destructor: stubDestructor, MaxSize: 10})
+		require.NoError(t, err)
+		defer pool.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
-	defer cancel()
-	res, err := pool.Acquire(ctx)
-	assert.Nil(t, res)
-	assert.Equal(t, context.DeadlineExceeded, err)
+		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+		defer cancel()
+		res, err := pool.Acquire(ctx)
+		assert.Nil(t, res)
+		assert.Equal(t, context.DeadlineExceeded, err)
 
-	time.Sleep(200 * time.Millisecond)
+		time.Sleep(75 * time.Millisecond)
+		synctest.Wait()
+		assert.EqualValues(t, 1, pool.Stat().IdleResources())
 
-	assert.EqualValues(t, 1, pool.Stat().TotalResources())
-	assert.EqualValues(t, 1, pool.Stat().CanceledAcquireCount())
+		assert.EqualValues(t, 1, pool.Stat().TotalResources())
+		assert.EqualValues(t, 1, pool.Stat().CanceledAcquireCount())
+	})
 }
 
 func TestPoolAcquireDoesNotCreatesResourceWhenItWouldExceedMaxSize(t *testing.T) {
@@ -130,16 +134,14 @@ func TestPoolAcquireDoesNotCreatesResourceWhenItWouldExceedMaxSize(t *testing.T)
 	wg := &sync.WaitGroup{}
 
 	for i := 0; i < 100; i++ {
-		wg.Add(1)
-		go func() {
+		wg.Go(func() {
 			for j := 0; j < 100; j++ {
 				res, err := pool.Acquire(context.Background())
 				assert.NoError(t, err)
 				assert.Equal(t, 1, res.Value())
 				res.Release()
 			}
-			wg.Done()
-		}()
+		})
 	}
 
 	wg.Wait()
@@ -156,8 +158,7 @@ func TestPoolAcquireWithCancellableContext(t *testing.T) {
 	wg := &sync.WaitGroup{}
 
 	for i := 0; i < 100; i++ {
-		wg.Add(1)
-		go func() {
+		wg.Go(func() {
 			for j := 0; j < 100; j++ {
 				ctx, cancel := context.WithCancel(context.Background())
 				res, err := pool.Acquire(ctx)
@@ -166,8 +167,7 @@ func TestPoolAcquireWithCancellableContext(t *testing.T) {
 				res.Release()
 				cancel()
 			}
-			wg.Done()
-		}()
+		})
 	}
 
 	wg.Wait()
@@ -190,30 +190,32 @@ func TestPoolAcquireReturnsErrorFromFailedResourceCreate(t *testing.T) {
 }
 
 func TestPoolAcquireCreatesResourceRespectingContext(t *testing.T) {
-	var cancel func()
-	constructor := func(ctx context.Context) (int, error) {
-		cancel()
-		// sleep to give a chance for the acquire to recognize it's cancelled
-		time.Sleep(10 * time.Millisecond)
-		return 1, nil
-	}
-	pool, err := puddle.NewPool(&puddle.Config[int]{Constructor: constructor, Destructor: stubDestructor, MaxSize: 1})
-	require.NoError(t, err)
-	defer pool.Close()
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		finishConstruction := make(chan struct{})
+		constructor := func(context.Context) (int, error) {
+			cancel()
+			<-finishConstruction
+			return 1, nil
+		}
+		pool, err := puddle.NewPool(&puddle.Config[int]{Constructor: constructor, Destructor: stubDestructor, MaxSize: 1})
+		require.NoError(t, err)
+		defer pool.Close()
+		var finishOnce sync.Once
+		defer finishOnce.Do(func() { close(finishConstruction) })
 
-	var ctx context.Context
-	ctx, cancel = context.WithCancel(context.Background())
-	defer cancel()
-	_, err = pool.Acquire(ctx)
-	assert.ErrorIs(t, err, context.Canceled)
+		res, err := pool.Acquire(ctx)
+		require.ErrorIs(t, err, context.Canceled)
+		require.Nil(t, res)
+		assert.EqualValues(t, 1, pool.Stat().ConstructingResources())
 
-	// wait for the constructor to sleep and then for the resource to be added back
-	// to the idle pool
-	time.Sleep(100 * time.Millisecond)
-
-	stat := pool.Stat()
-	assert.EqualValues(t, 1, stat.IdleResources())
-	assert.EqualValues(t, 1, stat.TotalResources())
+		finishOnce.Do(func() { close(finishConstruction) })
+		synctest.Wait()
+		stat := pool.Stat()
+		assert.EqualValues(t, 1, stat.IdleResources())
+		assert.EqualValues(t, 1, stat.TotalResources())
+	})
 }
 
 func TestPoolAcquireReusesResources(t *testing.T) {
@@ -237,28 +239,31 @@ func TestPoolAcquireReusesResources(t *testing.T) {
 }
 
 func TestPoolTryAcquire(t *testing.T) {
-	constructor, createCounter := createConstructor()
-	pool, err := puddle.NewPool(&puddle.Config[int]{Constructor: constructor, Destructor: stubDestructor, MaxSize: 1})
-	require.NoError(t, err)
+	synctest.Test(t, func(t *testing.T) {
+		constructor, createCounter := createConstructor()
+		pool, err := puddle.NewPool(&puddle.Config[int]{Constructor: constructor, Destructor: stubDestructor, MaxSize: 1})
+		require.NoError(t, err)
+		defer pool.Close()
 
-	// Pool is initially empty so TryAcquire fails but starts construction of resource in the background.
-	res, err := pool.TryAcquire(context.Background())
-	require.EqualError(t, err, puddle.ErrNotAvailable.Error())
-	assert.Nil(t, res)
+		// Pool is initially empty so TryAcquire fails but starts construction of resource in the background.
+		res, err := pool.TryAcquire(context.Background())
+		require.EqualError(t, err, puddle.ErrNotAvailable.Error())
+		assert.Nil(t, res)
 
-	// Wait for background creation to complete.
-	time.Sleep(100 * time.Millisecond)
+		// Wait for background creation to complete.
+		synctest.Wait()
 
-	res, err = pool.TryAcquire(context.Background())
-	require.NoError(t, err)
-	assert.Equal(t, 1, res.Value())
-	defer res.Release()
+		res, err = pool.TryAcquire(context.Background())
+		require.NoError(t, err)
+		assert.Equal(t, 1, res.Value())
+		defer res.Release()
 
-	res, err = pool.TryAcquire(context.Background())
-	require.EqualError(t, err, puddle.ErrNotAvailable.Error())
-	assert.Nil(t, res)
+		res, err = pool.TryAcquire(context.Background())
+		require.EqualError(t, err, puddle.ErrNotAvailable.Error())
+		assert.Nil(t, res)
 
-	assert.Equal(t, 1, createCounter.Value())
+		assert.Equal(t, 1, createCounter.Value())
+	})
 }
 
 func TestPoolTryAcquireReturnsErrorWhenPoolIsClosed(t *testing.T) {
@@ -573,25 +578,29 @@ func TestPoolAcquireContextAlreadyCanceled(t *testing.T) {
 }
 
 func TestPoolAcquireContextCanceledDuringCreate(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	time.AfterFunc(100*time.Millisecond, cancel)
-	timeoutChan := time.After(1 * time.Second)
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		time.AfterFunc(100*time.Millisecond, cancel)
+		timeoutChan := time.After(1 * time.Second)
 
-	var constructorCalls Counter
-	constructor := func(ctx context.Context) (int, error) {
-		select {
-		case <-ctx.Done():
-			return 0, ctx.Err()
-		case <-timeoutChan:
+		var constructorCalls Counter
+		constructor := func(ctx context.Context) (int, error) {
+			select {
+			case <-ctx.Done():
+				return 0, ctx.Err()
+			case <-timeoutChan:
+			}
+			return constructorCalls.Next(), nil
 		}
-		return constructorCalls.Next(), nil
-	}
-	pool, err := puddle.NewPool(&puddle.Config[int]{Constructor: constructor, Destructor: stubDestructor, MaxSize: 10})
-	require.NoError(t, err)
+		pool, err := puddle.NewPool(&puddle.Config[int]{Constructor: constructor, Destructor: stubDestructor, MaxSize: 10})
+		require.NoError(t, err)
+		defer pool.Close()
 
-	res, err := pool.Acquire(ctx)
-	assert.Equal(t, context.Canceled, err)
-	assert.Nil(t, res)
+		res, err := pool.Acquire(ctx)
+		assert.Equal(t, context.Canceled, err)
+		assert.Nil(t, res)
+	})
 }
 
 func TestPoolAcquireAllIdle(t *testing.T) {
@@ -684,26 +693,38 @@ func TestPoolCreateResourceReturnsErrorWhenAlreadyClosed(t *testing.T) {
 }
 
 func TestPoolCreateResourceReturnsErrorWhenClosedWhileCreatingResource(t *testing.T) {
-	// There is no way to guarantee the correct order of the pool being closed while the resource is being constructed.
-	// But these sleeps should make it extremely likely. (Ah, the lengths we go for 100% test coverage...)
-	constructor := func(ctx context.Context) (int, error) {
-		time.Sleep(500 * time.Millisecond)
-		return 123, nil
-	}
-	pool, err := puddle.NewPool(&puddle.Config[int]{Constructor: constructor, Destructor: stubDestructor, MaxSize: 10})
-	require.NoError(t, err)
+	synctest.Test(t, func(t *testing.T) {
+		finishConstruction := make(chan struct{})
+		constructor := func(context.Context) (int, error) {
+			<-finishConstruction
+			return 123, nil
+		}
+		pool, err := puddle.NewPool(&puddle.Config[int]{Constructor: constructor, Destructor: stubDestructor, MaxSize: 10})
+		require.NoError(t, err)
+		defer pool.Close()
+		var finishOnce sync.Once
+		defer finishOnce.Do(func() { close(finishConstruction) })
 
-	acquireErrChan := make(chan error)
-	go func() {
-		err := pool.CreateResource(context.Background())
-		acquireErrChan <- err
-	}()
+		createErr := make(chan error, 1)
+		go func() { createErr <- pool.CreateResource(context.Background()) }()
+		synctest.Wait()
+		require.EqualValues(t, 1, pool.Stat().ConstructingResources())
 
-	time.Sleep(250 * time.Millisecond)
-	pool.Close()
+		closed := false
+		go func() {
+			pool.Close()
+			closed = true
+		}()
+		synctest.Wait()
+		assert.False(t, closed, "Close must wait for construction and destruction")
+		_, err = pool.TryAcquire(context.Background())
+		require.ErrorIs(t, err, puddle.ErrClosedPool)
 
-	err = <-acquireErrChan
-	assert.Equal(t, puddle.ErrClosedPool, err)
+		finishOnce.Do(func() { close(finishConstruction) })
+		synctest.Wait()
+		assert.True(t, closed)
+		assert.ErrorIs(t, <-createErr, puddle.ErrClosedPool)
+	})
 }
 
 func TestPoolCreateResourceReturnsErrorWhenPoolFull(t *testing.T) {
@@ -756,31 +777,43 @@ func TestPoolCloseClosesAllIdleResources(t *testing.T) {
 }
 
 func TestPoolCloseBlocksUntilAllResourcesReleasedAndClosed(t *testing.T) {
-	constructor, _ := createConstructor()
-	var destructorCalls Counter
-	destructor := func(int) {
-		destructorCalls.Next()
-	}
+	synctest.Test(t, func(t *testing.T) {
+		constructor, _ := createConstructor()
+		finishDestruction := make(chan struct{})
+		var destructorCalls Counter
+		destructor := func(int) {
+			<-finishDestruction
+			destructorCalls.Next()
+		}
+		p, err := puddle.NewPool(&puddle.Config[int]{Constructor: constructor, Destructor: destructor, MaxSize: 10})
+		require.NoError(t, err)
 
-	p, err := puddle.NewPool(&puddle.Config[int]{Constructor: constructor, Destructor: destructor, MaxSize: 10})
-	require.NoError(t, err)
+		resources := make([]*puddle.Resource[int], 4)
+		for i := range resources {
+			resources[i], err = p.Acquire(context.Background())
+			require.NoError(t, err)
+		}
 
-	resources := make([]*puddle.Resource[int], 4)
-	for i := range resources {
-		var err error
-		resources[i], err = p.Acquire(context.Background())
-		require.Nil(t, err)
-	}
+		closed := false
+		go func() {
+			p.Close()
+			closed = true
+		}()
+		synctest.Wait()
+		assert.False(t, closed, "Close must wait for checked-out resources")
 
-	for _, res := range resources {
-		go func(res *puddle.Resource[int]) {
-			time.Sleep(100 * time.Millisecond)
+		for _, res := range resources {
 			res.Release()
-		}(res)
-	}
+		}
+		synctest.Wait()
+		assert.False(t, closed, "Close must wait for destructors to finish")
+		assert.Zero(t, destructorCalls.Value())
 
-	p.Close()
-	assert.Equal(t, len(resources), destructorCalls.Value())
+		close(finishDestruction)
+		synctest.Wait()
+		assert.True(t, closed)
+		assert.Equal(t, len(resources), destructorCalls.Value())
+	})
 }
 
 func TestPoolCloseIsSafeToCallMultipleTimes(t *testing.T) {
@@ -794,81 +827,75 @@ func TestPoolCloseIsSafeToCallMultipleTimes(t *testing.T) {
 }
 
 func TestPoolResetDestroysAllIdleResources(t *testing.T) {
-	constructor, _ := createConstructor()
+	synctest.Test(t, func(t *testing.T) {
+		constructor, _ := createConstructor()
 
-	var destructorCalls Counter
-	destructor := func(int) {
-		destructorCalls.Next()
-	}
-
-	p, err := puddle.NewPool(&puddle.Config[int]{Constructor: constructor, Destructor: destructor, MaxSize: 10})
-	require.NoError(t, err)
-
-	resources := make([]*puddle.Resource[int], 4)
-	for i := range resources {
-		var err error
-		resources[i], err = p.Acquire(context.Background())
-		require.Nil(t, err)
-	}
-
-	for _, res := range resources {
-		res.Release()
-	}
-
-	require.EqualValues(t, 4, p.Stat().TotalResources())
-	p.Reset()
-	require.EqualValues(t, 0, p.Stat().TotalResources())
-
-	// Destructors are called in the background. No way to know when they are all finished.
-	for i := 0; i < 100; i++ {
-		if destructorCalls.Value() == len(resources) {
-			break
+		var destructorCalls Counter
+		destructor := func(int) {
+			destructorCalls.Next()
 		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	require.Equal(t, len(resources), destructorCalls.Value())
 
-	p.Close()
+		p, err := puddle.NewPool(&puddle.Config[int]{Constructor: constructor, Destructor: destructor, MaxSize: 10})
+		require.NoError(t, err)
+
+		resources := make([]*puddle.Resource[int], 4)
+		for i := range resources {
+			var err error
+			resources[i], err = p.Acquire(context.Background())
+			require.Nil(t, err)
+		}
+
+		for _, res := range resources {
+			res.Release()
+		}
+
+		require.EqualValues(t, 4, p.Stat().TotalResources())
+		p.Reset()
+		require.EqualValues(t, 0, p.Stat().TotalResources())
+
+		// Wait for background destruction to complete.
+		synctest.Wait()
+		require.Equal(t, len(resources), destructorCalls.Value())
+
+		p.Close()
+	})
 }
 
 func TestPoolResetDestroysCheckedOutResourcesOnReturn(t *testing.T) {
-	constructor, _ := createConstructor()
+	synctest.Test(t, func(t *testing.T) {
+		constructor, _ := createConstructor()
 
-	var destructorCalls Counter
-	destructor := func(int) {
-		destructorCalls.Next()
-	}
-
-	p, err := puddle.NewPool(&puddle.Config[int]{Constructor: constructor, Destructor: destructor, MaxSize: 10})
-	require.NoError(t, err)
-
-	resources := make([]*puddle.Resource[int], 4)
-	for i := range resources {
-		var err error
-		resources[i], err = p.Acquire(context.Background())
-		require.Nil(t, err)
-	}
-
-	require.EqualValues(t, 4, p.Stat().TotalResources())
-	p.Reset()
-	require.EqualValues(t, 4, p.Stat().TotalResources())
-
-	for _, res := range resources {
-		res.Release()
-	}
-
-	require.EqualValues(t, 0, p.Stat().TotalResources())
-
-	// Destructors are called in the background. No way to know when they are all finished.
-	for i := 0; i < 100; i++ {
-		if destructorCalls.Value() == len(resources) {
-			break
+		var destructorCalls Counter
+		destructor := func(int) {
+			destructorCalls.Next()
 		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	require.Equal(t, len(resources), destructorCalls.Value())
 
-	p.Close()
+		p, err := puddle.NewPool(&puddle.Config[int]{Constructor: constructor, Destructor: destructor, MaxSize: 10})
+		require.NoError(t, err)
+
+		resources := make([]*puddle.Resource[int], 4)
+		for i := range resources {
+			var err error
+			resources[i], err = p.Acquire(context.Background())
+			require.Nil(t, err)
+		}
+
+		require.EqualValues(t, 4, p.Stat().TotalResources())
+		p.Reset()
+		require.EqualValues(t, 4, p.Stat().TotalResources())
+
+		for _, res := range resources {
+			res.Release()
+		}
+
+		require.EqualValues(t, 0, p.Stat().TotalResources())
+
+		// Wait for background destruction to complete.
+		synctest.Wait()
+		require.Equal(t, len(resources), destructorCalls.Value())
+
+		p.Close()
+	})
 }
 
 func TestPoolStatResources(t *testing.T) {
@@ -922,58 +949,58 @@ func TestPoolStatResources(t *testing.T) {
 }
 
 func TestPoolStatSuccessfulAcquireCounters(t *testing.T) {
-	constructor, _ := createConstructor()
-	sleepConstructor := func(ctx context.Context) (int, error) {
-		// sleep to make sure we don't fail the AcquireDuration test
-		time.Sleep(time.Nanosecond)
-		return constructor(ctx)
-	}
-	pool, err := puddle.NewPool(&puddle.Config[int]{Constructor: sleepConstructor, Destructor: stubDestructor, MaxSize: 1})
-	require.NoError(t, err)
-	defer pool.Close()
+	synctest.Test(t, func(t *testing.T) {
+		constructor, _ := createConstructor()
+		sleepConstructor := func(ctx context.Context) (int, error) {
+			time.Sleep(10 * time.Millisecond)
+			return constructor(ctx)
+		}
+		pool, err := puddle.NewPool(&puddle.Config[int]{Constructor: sleepConstructor, Destructor: stubDestructor, MaxSize: 1})
+		require.NoError(t, err)
+		defer pool.Close()
 
-	res, err := pool.Acquire(context.Background())
-	require.NoError(t, err)
-	res.Release()
+		res, err := pool.Acquire(context.Background())
+		require.NoError(t, err)
+		res.Release()
 
-	stat := pool.Stat()
-	assert.Equal(t, int64(1), stat.AcquireCount())
-	assert.Equal(t, int64(1), stat.EmptyAcquireCount())
-	assert.Positive(t, stat.AcquireDuration(), "expected stat.AcquireDuration() > 0 but %v", stat.AcquireDuration())
-	assert.Equal(t, stat.EmptyAcquireWaitTime(), stat.AcquireDuration())
-	lastAcquireDuration := stat.AcquireDuration()
+		stat := pool.Stat()
+		assert.EqualValues(t, 1, stat.AcquireCount())
+		assert.EqualValues(t, 1, stat.EmptyAcquireCount())
+		assert.Equal(t, 10*time.Millisecond, stat.AcquireDuration())
+		assert.Equal(t, 10*time.Millisecond, stat.EmptyAcquireWaitTime())
 
-	res, err = pool.Acquire(context.Background())
-	require.NoError(t, err)
-	res.Release()
+		// Reusing an idle resource does not advance virtual time.
+		res, err = pool.Acquire(context.Background())
+		require.NoError(t, err)
+		res.Release()
 
-	stat = pool.Stat()
-	assert.Equal(t, int64(2), stat.AcquireCount())
-	assert.Equal(t, int64(1), stat.EmptyAcquireCount())
-	assert.Greater(t, stat.AcquireDuration(), lastAcquireDuration)
-	assert.Less(t, stat.EmptyAcquireWaitTime(), stat.AcquireDuration())
-	lastAcquireDuration = stat.AcquireDuration()
+		stat = pool.Stat()
+		assert.EqualValues(t, 2, stat.AcquireCount())
+		assert.EqualValues(t, 1, stat.EmptyAcquireCount())
+		assert.Equal(t, 10*time.Millisecond, stat.AcquireDuration())
+		assert.Equal(t, 10*time.Millisecond, stat.EmptyAcquireWaitTime())
 
-	wg := &sync.WaitGroup{}
-	for i := 0; i < 2; i++ {
-		wg.Add(1)
-		go func() {
-			res, err = pool.Acquire(context.Background())
-			require.NoError(t, err)
-			time.Sleep(50 * time.Millisecond)
-			res.Release()
-			wg.Done()
-		}()
-	}
+		var wg sync.WaitGroup
+		for i := 0; i < 2; i++ {
+			wg.Go(func() {
+				res, err := pool.Acquire(context.Background())
+				if !assert.NoError(t, err) {
+					return
+				}
+				time.Sleep(50 * time.Millisecond)
+				res.Release()
+			})
+		}
+		wg.Wait()
 
-	wg.Wait()
-
-	stat = pool.Stat()
-	assert.Equal(t, int64(4), stat.AcquireCount())
-	assert.Equal(t, int64(2), stat.EmptyAcquireCount())
-	assert.Greater(t, stat.AcquireDuration(), lastAcquireDuration)
-	assert.Less(t, stat.EmptyAcquireWaitTime(), stat.AcquireDuration())
-	lastAcquireDuration = stat.AcquireDuration()
+		// One acquire reused the idle resource immediately; the other waited
+		// 50ms for it. Both duration counters include the initial construction.
+		stat = pool.Stat()
+		assert.EqualValues(t, 4, stat.AcquireCount())
+		assert.EqualValues(t, 2, stat.EmptyAcquireCount())
+		assert.Equal(t, 60*time.Millisecond, stat.AcquireDuration())
+		assert.Equal(t, 60*time.Millisecond, stat.EmptyAcquireWaitTime())
+	})
 }
 
 func TestPoolStatCanceledAcquireBeforeStart(t *testing.T) {
@@ -993,47 +1020,52 @@ func TestPoolStatCanceledAcquireBeforeStart(t *testing.T) {
 }
 
 func TestPoolStatCanceledAcquireDuringCreate(t *testing.T) {
-	constructor := func(ctx context.Context) (int, error) {
-		<-ctx.Done()
-		return 0, ctx.Err()
-	}
+	synctest.Test(t, func(t *testing.T) {
+		constructor := func(ctx context.Context) (int, error) {
+			<-ctx.Done()
+			return 0, ctx.Err()
+		}
 
-	pool, err := puddle.NewPool(&puddle.Config[int]{Constructor: constructor, Destructor: stubDestructor, MaxSize: 1})
-	require.NoError(t, err)
-	defer pool.Close()
+		pool, err := puddle.NewPool(&puddle.Config[int]{Constructor: constructor, Destructor: stubDestructor, MaxSize: 1})
+		require.NoError(t, err)
+		defer pool.Close()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	time.AfterFunc(50*time.Millisecond, cancel)
-	_, err = pool.Acquire(ctx)
-	require.Equal(t, context.Canceled, err)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		time.AfterFunc(50*time.Millisecond, cancel)
+		_, err = pool.Acquire(ctx)
+		require.Equal(t, context.Canceled, err)
 
-	// sleep to give the constructor goroutine time to mark cancelled
-	time.Sleep(10 * time.Millisecond)
+		synctest.Wait()
 
-	stat := pool.Stat()
-	assert.Equal(t, int64(0), stat.AcquireCount())
-	assert.Equal(t, int64(1), stat.CanceledAcquireCount())
+		stat := pool.Stat()
+		assert.Equal(t, int64(0), stat.AcquireCount())
+		assert.Equal(t, int64(1), stat.CanceledAcquireCount())
+	})
 }
 
 func TestPoolStatCanceledAcquireDuringWait(t *testing.T) {
-	constructor, _ := createConstructor()
-	pool, err := puddle.NewPool(&puddle.Config[int]{Constructor: constructor, Destructor: stubDestructor, MaxSize: 1})
-	require.NoError(t, err)
-	defer pool.Close()
+	synctest.Test(t, func(t *testing.T) {
+		constructor, _ := createConstructor()
+		pool, err := puddle.NewPool(&puddle.Config[int]{Constructor: constructor, Destructor: stubDestructor, MaxSize: 1})
+		require.NoError(t, err)
+		defer pool.Close()
 
-	res, err := pool.Acquire(context.Background())
-	require.Nil(t, err)
+		res, err := pool.Acquire(context.Background())
+		require.Nil(t, err)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	time.AfterFunc(50*time.Millisecond, cancel)
-	_, err = pool.Acquire(ctx)
-	require.Equal(t, context.Canceled, err)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		time.AfterFunc(50*time.Millisecond, cancel)
+		_, err = pool.Acquire(ctx)
+		require.Equal(t, context.Canceled, err)
 
-	res.Release()
+		res.Release()
 
-	stat := pool.Stat()
-	assert.Equal(t, int64(1), stat.AcquireCount())
-	assert.Equal(t, int64(1), stat.CanceledAcquireCount())
+		stat := pool.Stat()
+		assert.Equal(t, int64(1), stat.AcquireCount())
+		assert.Equal(t, int64(1), stat.CanceledAcquireCount())
+	})
 }
 
 func TestResourceHijackRemovesResourceFromPoolButDoesNotDestroy(t *testing.T) {
@@ -1062,59 +1094,67 @@ func TestResourceHijackRemovesResourceFromPoolButDoesNotDestroy(t *testing.T) {
 }
 
 func TestResourceDestroyRemovesResourceFromPool(t *testing.T) {
-	constructor, _ := createConstructor()
-	pool, err := puddle.NewPool(&puddle.Config[int]{Constructor: constructor, Destructor: stubDestructor, MaxSize: 10})
-	require.NoError(t, err)
+	synctest.Test(t, func(t *testing.T) {
+		constructor, _ := createConstructor()
+		pool, err := puddle.NewPool(&puddle.Config[int]{Constructor: constructor, Destructor: stubDestructor, MaxSize: 10})
+		require.NoError(t, err)
+		defer pool.Close()
 
-	res, err := pool.Acquire(context.Background())
-	require.NoError(t, err)
-	assert.Equal(t, 1, res.Value())
+		res, err := pool.Acquire(context.Background())
+		require.NoError(t, err)
+		assert.Equal(t, 1, res.Value())
 
-	assert.EqualValues(t, 1, pool.Stat().TotalResources())
-	res.Destroy()
-	for i := 0; i < 1000; i++ {
-		if pool.Stat().TotalResources() == 0 {
-			break
-		}
-		time.Sleep(time.Millisecond)
-	}
+		assert.EqualValues(t, 1, pool.Stat().TotalResources())
+		res.Destroy()
+		synctest.Wait()
 
-	assert.EqualValues(t, 0, pool.Stat().TotalResources())
+		assert.EqualValues(t, 0, pool.Stat().TotalResources())
+	})
 }
 
 func TestResourceLastUsageTimeTracking(t *testing.T) {
-	constructor, _ := createConstructor()
-	pool, err := puddle.NewPool(&puddle.Config[int]{Constructor: constructor, Destructor: stubDestructor, MaxSize: 1})
-	require.NoError(t, err)
+	synctest.Test(t, func(t *testing.T) {
+		constructor, _ := createConstructor()
+		pool, err := puddle.NewPool(&puddle.Config[int]{Constructor: constructor, Destructor: stubDestructor, MaxSize: 1})
+		require.NoError(t, err)
+		defer pool.Close()
 
-	res, err := pool.Acquire(context.Background())
-	require.NoError(t, err)
-	t1 := res.LastUsedNanotime()
-	res.Release()
+		res, err := pool.Acquire(context.Background())
+		require.NoError(t, err)
+		// The process-global time origin predates the bubble, so compare
+		// differences between readings made within the same virtual clock.
+		t1 := res.LastUsedNanotime()
+		time.Sleep(time.Second)
+		res.Release()
+		time.Sleep(2 * time.Second)
 
-	// Greater than zero after initial usage
-	res, err = pool.Acquire(context.Background())
-	require.NoError(t, err)
-	t2 := res.LastUsedNanotime()
-	d2 := res.IdleDuration()
-	assert.True(t, t2 > t1)
-	res.ReleaseUnused()
+		// Release records the time of the last use.
+		res, err = pool.Acquire(context.Background())
+		require.NoError(t, err)
+		t2 := res.LastUsedNanotime()
+		d2 := res.IdleDuration()
+		assert.Equal(t, int64(time.Second), t2-t1)
+		assert.Equal(t, 2*time.Second, d2)
+		res.ReleaseUnused()
+		time.Sleep(3 * time.Second)
 
-	// ReleaseUnused does not update usage tracking
-	res, err = pool.Acquire(context.Background())
-	require.NoError(t, err)
-	t3 := res.LastUsedNanotime()
-	d3 := res.IdleDuration()
-	assert.EqualValues(t, t2, t3)
-	assert.True(t, d3 > d2)
-	res.Release()
+		// ReleaseUnused does not update usage tracking
+		res, err = pool.Acquire(context.Background())
+		require.NoError(t, err)
+		t3 := res.LastUsedNanotime()
+		d3 := res.IdleDuration()
+		assert.EqualValues(t, t2, t3)
+		assert.Equal(t, 5*time.Second, d3)
+		res.Release()
 
-	// Release does update usage tracking
-	res, err = pool.Acquire(context.Background())
-	require.NoError(t, err)
-	t4 := res.LastUsedNanotime()
-	assert.True(t, t4 > t3)
-	res.Release()
+		// Release does update usage tracking
+		res, err = pool.Acquire(context.Background())
+		require.NoError(t, err)
+		t4 := res.LastUsedNanotime()
+		assert.Equal(t, int64(5*time.Second), t4-t3)
+		assert.Zero(t, res.IdleDuration())
+		res.Release()
+	})
 }
 
 func TestResourcePanicsOnUsageWhenNotAcquired(t *testing.T) {
@@ -1148,34 +1188,45 @@ func TestPoolAcquireReturnsErrorWhenPoolIsClosed(t *testing.T) {
 }
 
 func TestSignalIsSentWhenResourceFailedToCreate(t *testing.T) {
-	var c Counter
-	constructor := func(context.Context) (a any, err error) {
-		if c.Next() == 2 {
-			return nil, errors.New("outage")
+	synctest.Test(t, func(t *testing.T) {
+		var calls Counter
+		errOutage := errors.New("outage")
+		constructor := func(context.Context) (int, error) {
+			if calls.Next() == 2 {
+				return 0, errOutage
+			}
+			return 1, nil
 		}
-		return 1, nil
-	}
-	destructor := func(value any) {}
+		pool, err := puddle.NewPool(&puddle.Config[int]{Constructor: constructor, Destructor: stubDestructor, MaxSize: 1})
+		require.NoError(t, err)
+		defer pool.Close()
 
-	pool, err := puddle.NewPool(&puddle.Config[any]{Constructor: constructor, Destructor: destructor, MaxSize: 10})
-	require.NoError(t, err)
+		res, err := pool.Acquire(context.Background())
+		require.NoError(t, err)
 
-	res1, err := pool.Acquire(context.Background())
-	require.NoError(t, err)
+		results := make(chan error, 2)
+		var wg sync.WaitGroup
+		for i := 0; i < 2; i++ {
+			wg.Go(func() {
+				res, err := pool.Acquire(context.Background())
+				if err == nil {
+					res.Release()
+				}
+				results <- err
+			})
+		}
+		synctest.Wait()
+		assert.Empty(t, results, "both acquires must be waiting for the only resource")
+		assert.Equal(t, 1, calls.Value())
 
-	var wg sync.WaitGroup
-	for i := 0; i < 2; i++ {
-		wg.Add(1)
-		go func(name string) {
-			defer wg.Done()
-			_, _ = pool.Acquire(context.Background())
-		}(strconv.Itoa(i))
-	}
-
-	// ensure that both goroutines above are waiting for condition variable signal
-	time.Sleep(500 * time.Millisecond)
-	res1.Destroy()
-	wg.Wait()
+		// Destroy wakes one waiter, whose failed constructor must wake the other.
+		res.Destroy()
+		wg.Wait()
+		errs := []error{<-results, <-results}
+		assert.ElementsMatch(t, []error{errOutage, nil}, errs)
+		assert.Equal(t, 3, calls.Value())
+		assert.EqualValues(t, 1, pool.Stat().IdleResources())
+	})
 }
 
 func stressTestDur(t testing.TB) time.Duration {
@@ -1285,9 +1336,7 @@ func TestStress(t *testing.T) {
 	workerCount := int(poolSize) * 2
 
 	for i := 0; i < workerCount; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for {
 				select {
 				case <-finishChan:
@@ -1297,7 +1346,7 @@ func TestStress(t *testing.T) {
 
 				actions[rand.Intn(len(actions))]()
 			}
-		}()
+		})
 	}
 
 	time.AfterFunc(stressTestDur(t), func() { close(finishChan) })
@@ -1313,10 +1362,7 @@ func TestStress_AcquireAllIdle_TryAcquire(t *testing.T) {
 	var wg sync.WaitGroup
 	done := make(chan struct{})
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-
+	wg.Go(func() {
 		for {
 			select {
 			case <-done:
@@ -1330,12 +1376,9 @@ func TestStress_AcquireAllIdle_TryAcquire(t *testing.T) {
 				res.Release()
 			}
 		}
-	}()
+	})
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-
+	wg.Go(func() {
 		for {
 			select {
 			case <-done:
@@ -1351,7 +1394,7 @@ func TestStress_AcquireAllIdle_TryAcquire(t *testing.T) {
 				res.Release()
 			}
 		}
-	}()
+	})
 
 	time.AfterFunc(stressTestDur(t), func() { close(done) })
 	wg.Wait()
@@ -1365,10 +1408,7 @@ func TestStress_AcquireAllIdle_Acquire(t *testing.T) {
 	var wg sync.WaitGroup
 	done := make(chan struct{})
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-
+	wg.Go(func() {
 		for {
 			select {
 			case <-done:
@@ -1383,12 +1423,9 @@ func TestStress_AcquireAllIdle_Acquire(t *testing.T) {
 				res.Release()
 			}
 		}
-	}()
+	})
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-
+	wg.Go(func() {
 		for {
 			select {
 			case <-done:
@@ -1404,7 +1441,7 @@ func TestStress_AcquireAllIdle_Acquire(t *testing.T) {
 				res.Release()
 			}
 		}
-	}()
+	})
 
 	time.AfterFunc(stressTestDur(t), func() { close(done) })
 	wg.Wait()
@@ -1556,10 +1593,7 @@ func BenchmarkPoolAcquireAndRelease(b *testing.B) {
 			}
 
 			for i := 0; i < bm.clientCount; i++ {
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
-
+				wg.Go(func() {
 					for j := 0; j < b.N; j++ {
 						res, err := pool.Acquire(ctx)
 						if err != nil {
@@ -1568,7 +1602,7 @@ func BenchmarkPoolAcquireAndRelease(b *testing.B) {
 						}
 						res.Release()
 					}
-				}()
+				})
 			}
 
 			wg.Wait()

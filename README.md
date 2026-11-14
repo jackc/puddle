@@ -73,7 +73,7 @@ Puddle is stable and feature complete.
 
 ## Supported Go Versions
 
-puddle supports the same versions of Go that are supported by the Go project: the [two most recent major releases](https://go.dev/doc/devel/release#policy). The minimum Go version declared in `go.mod` is 1.19, which is also tested in CI as a compatibility baseline.
+puddle supports the same versions of Go that are supported by the Go project: the [two most recent major releases](https://go.dev/doc/devel/release#policy). The minimum Go version is 1.26.11. CI tests this minimum alongside the latest patches of the two supported releases.
 
 ## Differences with Go sync.Pool
 
