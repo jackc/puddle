@@ -409,6 +409,140 @@ func TestPoolTryAcquireDestroysResourceConstructedBeforeReset(t *testing.T) {
 	res.Release()
 }
 
+func TestPoolCreateResourceDestroysResourceConstructedAfterClose(t *testing.T) {
+	constructionStarted := make(chan struct{})
+	idleDestroyed := make(chan struct{})
+	destructionStarted := make(chan struct{})
+	finishDestruction := make(chan struct{})
+	var constructorCalls Counter
+	var destructorCalls Counter
+	constructor := func(context.Context) (int, error) {
+		value := constructorCalls.Next()
+		if value == 2 {
+			close(constructionStarted)
+			<-idleDestroyed
+		}
+		return value, nil
+	}
+	destructor := func(value int) {
+		if value == 1 {
+			close(idleDestroyed)
+		}
+		if value == 2 {
+			close(destructionStarted)
+			<-finishDestruction
+		}
+		destructorCalls.Next()
+	}
+	pool, err := puddle.NewPool(&puddle.Config[int]{Constructor: constructor, Destructor: destructor, MaxSize: 2})
+	require.NoError(t, err)
+	var destructionOnce sync.Once
+	t.Cleanup(func() {
+		destructionOnce.Do(func() { close(finishDestruction) })
+		pool.Close()
+	})
+
+	require.NoError(t, pool.CreateResource(context.Background()))
+
+	errc := make(chan error, 1)
+	go func() { errc <- pool.CreateResource(context.Background()) }()
+	select {
+	case <-constructionStarted:
+	case <-time.After(time.Second):
+		t.Fatal("CreateResource did not start construction")
+	}
+
+	// Close destroys the idle resource, which releases the constructor only after closed is set.
+	closeFinished := make(chan struct{})
+	go func() {
+		pool.Close()
+		close(closeFinished)
+	}()
+	select {
+	case <-destructionStarted:
+	case <-time.After(time.Second):
+		t.Fatal("resource constructed after Close was not destroyed")
+	}
+	select {
+	case <-closeFinished:
+		t.Fatal("Close returned before destruction finished")
+	default:
+	}
+	destructionOnce.Do(func() { close(finishDestruction) })
+	select {
+	case <-closeFinished:
+	case <-time.After(time.Second):
+		t.Fatal("Close did not return after destruction finished")
+	}
+	select {
+	case err := <-errc:
+		assert.ErrorIs(t, err, puddle.ErrClosedPool)
+	case <-time.After(time.Second):
+		t.Fatal("CreateResource did not return after Close")
+	}
+	assert.Equal(t, 2, destructorCalls.Value())
+	assert.Zero(t, pool.Stat().TotalResources())
+	assert.Zero(t, pool.Stat().IdleResources())
+}
+
+func TestPoolCreateResourceDestroysResourceConstructedBeforeReset(t *testing.T) {
+	constructionStarted := make(chan struct{})
+	finishConstruction := make(chan struct{})
+	destroyed := make(chan int, 1)
+	var constructorCalls Counter
+	constructor := func(context.Context) (int, error) {
+		value := constructorCalls.Next()
+		if value == 1 {
+			close(constructionStarted)
+			<-finishConstruction
+		}
+		return value, nil
+	}
+	pool, err := puddle.NewPool(&puddle.Config[int]{
+		Constructor: constructor,
+		Destructor:  func(value int) { destroyed <- value },
+		MaxSize:     1,
+	})
+	require.NoError(t, err)
+	var constructionOnce sync.Once
+	t.Cleanup(func() {
+		constructionOnce.Do(func() { close(finishConstruction) })
+		pool.Close()
+	})
+
+	errc := make(chan error, 1)
+	go func() { errc <- pool.CreateResource(context.Background()) }()
+	select {
+	case <-constructionStarted:
+	case <-time.After(time.Second):
+		t.Fatal("CreateResource did not start construction")
+	}
+	pool.Reset()
+	constructionOnce.Do(func() { close(finishConstruction) })
+
+	select {
+	case err := <-errc:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("CreateResource did not return after Reset")
+	}
+	select {
+	case value := <-destroyed:
+		assert.Equal(t, 1, value)
+	case <-time.After(time.Second):
+		t.Fatal("resource constructed before Reset was not destroyed")
+	}
+	assert.Zero(t, pool.Stat().TotalResources())
+	assert.Zero(t, pool.Stat().IdleResources())
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	res, err := pool.Acquire(ctx)
+	require.NoError(t, err)
+	defer res.Release()
+	assert.Equal(t, 2, res.Value())
+}
+
 func TestPoolAcquireNilContextDoesNotLeavePoolLocked(t *testing.T) {
 	constructor, createCounter := createConstructor()
 	pool, err := puddle.NewPool(&puddle.Config[int]{Constructor: constructor, Destructor: stubDestructor, MaxSize: 10})
