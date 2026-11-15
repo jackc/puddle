@@ -88,3 +88,58 @@ func TestGenStack_MuptiGen(t *testing.T) {
 	requirePop(t, s, 15)
 	requirePopEmpty(t, s)
 }
+
+// The oracle is a queue of literal generation stacks, independent of the
+// implementation's two-stack representation and generation compaction.
+func FuzzGenStackMatchesGenerations(f *testing.F) {
+	// 0 = Push, 1 = Pop, 2 = NextGen.
+	f.Add([]byte{0, 0, 2, 0, 1, 1, 1})
+	f.Add([]byte{0, 0, 2, 0, 2, 0, 1, 2, 1, 1, 1})
+	f.Add([]byte{2, 2, 0, 1, 2, 0, 2, 2, 1, 1})
+	f.Fuzz(func(t *testing.T, operations []byte) {
+		if len(operations) > 512 {
+			t.Skip()
+		}
+		stack := NewGenStack[int]()
+		generations := [][]int{nil}
+		next, count := 0, 0
+		pop := func() {
+			for len(generations) > 1 && len(generations[0]) == 0 {
+				generations = generations[1:]
+			}
+			got, ok := stack.Pop()
+			if count == 0 {
+				require.False(t, ok)
+				require.Zero(t, got)
+				return
+			}
+			generation := generations[0]
+			want := generation[len(generation)-1]
+			generations[0] = generation[:len(generation)-1]
+			count--
+			require.True(t, ok)
+			require.Equal(t, want, got)
+		}
+		for _, operation := range operations {
+			switch operation % 3 {
+			case 0:
+				next++
+				stack.Push(next)
+				last := len(generations) - 1
+				generations[last] = append(generations[last], next)
+				count++
+			case 1:
+				pop()
+			case 2:
+				stack.NextGen()
+				generations = append(generations, nil)
+			}
+			require.Equal(t, count, stack.Len())
+		}
+		for count > 0 {
+			pop()
+			require.Equal(t, count, stack.Len())
+		}
+		pop()
+	})
+}

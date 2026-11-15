@@ -568,7 +568,9 @@ func acquireSemAll(sem *semaphore.Weighted, num int) int {
 
 // AcquireAllIdle acquires all currently idle resources. Its intended use is for
 // health check and keep-alive functionality. It does not update pool
-// statistics.
+// acquisition statistics. It may return fewer resources when concurrent
+// operations have reserved capacity. Remaining older idle resources are
+// preferred over subsequently released resources.
 func (p *Pool[T]) AcquireAllIdle() []*Resource[T] {
 	p.mux.Lock()
 	defer p.mux.Unlock()
@@ -589,9 +591,10 @@ func (p *Pool[T]) AcquireAllIdle() []*Resource[T] {
 	// Because the mutex is locked, no parallel Release can run. This
 	// implies that the number of tokens can only decrease because some
 	// Acquire/TryAcquire call can consume the semaphore token. Consequently
-	// acquired is always less or equal to numIdle. Moreover if acquired <
-	// numIdle, then there are some parallel Acquire/TryAcquire calls that
-	// will take the remaining idle connections.
+	// acquired is always less or equal to numIdle. If acquired < numIdle,
+	// concurrent operations have reserved capacity. These may include
+	// CreateResource calls, which can reject a full pool without consuming
+	// an idle resource.
 	acquired := acquireSemAll(p.acquireSem, numIdle)
 
 	idle := make([]*Resource[T], acquired)
@@ -601,10 +604,8 @@ func (p *Pool[T]) AcquireAllIdle() []*Resource[T] {
 		idle[i] = res
 	}
 
-	// We have to bump the generation to ensure that Acquire/TryAcquire
-	// calls running in parallel (those which caused acquired < numIdle)
-	// will consume old connections and not freshly released connections
-	// instead.
+	// Bump the generation so subsequently admitted Acquire/TryAcquire calls
+	// consume remaining older idle resources before freshly released ones.
 	p.idleResources.NextGen()
 
 	return idle

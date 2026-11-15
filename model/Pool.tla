@@ -1,11 +1,12 @@
 ------------------------------ MODULE Pool ------------------------------
 EXTENDS Naturals, FiniteSets
 
-CONSTANTS Clients, Resources, Capacity, Bug
+CONSTANTS Clients, Resources, Capacity, Bug, BatchEnabled
 ASSUME /\ Capacity > 0
        /\ Clients # {} /\ IsFiniteSet(Clients)
        /\ Resources # {} /\ IsFiniteSet(Resources)
        /\ 0 \notin Resources
+       /\ BatchEnabled \in BOOLEAN
        /\ Bug \in {"none", "publish-invalid", "leak-failure-permit"}
 
 \* A bounded lifecycle model, not a translation or proof of the Go source.
@@ -34,7 +35,7 @@ Invalid(r) == closed \/ r \in stale
 Init ==
     /\ phase = [c \in Clients |-> "ready"]
     /\ mode = [c \in Clients |-> "acquire"]
-    /\ held = [c \in Clients |-> 0]
+    /\ held = [c \in Clients |-> {}]
     /\ state = [r \in Resources |-> "unused"]
     /\ caller = [r \in Resources |-> CHOOSE c \in Clients : TRUE]
     /\ origin = [r \in Resources |-> "acquire"]
@@ -82,7 +83,7 @@ TakeIdle(c, r) ==
     /\ phase[c] = "reserved" /\ ~closed
     /\ mode[c] # "create" /\ r \in Idle
     /\ phase' = [phase EXCEPT ![c] = "holding"]
-    /\ held' = [held EXCEPT ![c] = r]
+    /\ held' = [held EXCEPT ![c] = {r}]
     /\ state' = [state EXCEPT ![r] = "acquired"]
     /\ UNCHANGED <<mode, caller, origin, stale, abandoned, permits,
                     obligations, destroyed, closed, closeReturned>>
@@ -100,6 +101,21 @@ StartConstruction(c, r) ==
     /\ UNCHANGED <<mode, held, stale, abandoned, permits, destroyed, closed, closeReturned>>
 
 Admit(c) == Reject(c) \/ (\E r \in Resources : TakeIdle(c, r) \/ StartConstruction(c, r))
+
+\* Abstract batch admission. The focused AcquireAllIdle model checks the
+\* incremental semaphore algorithm and the concrete generational stack.
+\* Here any subset that fits available permits is allowed: an intentional
+\* overapproximation of batch selection, preserving its lifecycle effects.
+AcquireAllIdle(c, batch) ==
+    /\ BatchEnabled /\ phase[c] = "ready" /\ ~closed
+    /\ batch \subseteq Idle /\ batch # {}
+    /\ Cardinality(batch) <= Capacity - permits
+    /\ phase' = [phase EXCEPT ![c] = "holding"]
+    /\ held' = [held EXCEPT ![c] = batch]
+    /\ state' = [r \in Resources |-> IF r \in batch THEN "acquired" ELSE state[r]]
+    /\ permits' = permits + Cardinality(batch)
+    /\ UNCHANGED <<mode, caller, origin, stale, abandoned,
+                    obligations, destroyed, closed, closeReturned>>
 
 \* Observing cancellation returns the caller immediately. The constructor
 \* and its permit/WaitGroup obligation remain alive independently.
@@ -141,7 +157,7 @@ CompleteConstruction(r) == ConstructionFailed(r) \/ ConstructionSucceeded(r)
 Deliver(r) ==
     /\ state[r] = "handoff" /\ r \notin abandoned
     /\ phase' = [phase EXCEPT ![caller[r]] = "holding"]
-    /\ held' = [held EXCEPT ![caller[r]] = r]
+    /\ held' = [held EXCEPT ![caller[r]] = {r}]
     /\ state' = [state EXCEPT ![r] = "acquired"]
     /\ UNCHANGED <<mode, caller, origin, stale, abandoned, permits,
                     obligations, destroyed, closed, closeReturned>>
@@ -155,34 +171,34 @@ ReturnAbandoned(r) ==
 
 Handoff(r) == Deliver(r) \/ ReturnAbandoned(r)
 
-Release(c) ==
-    /\ phase[c] = "holding"
-    /\ state' = [state EXCEPT ![held[c]] = IF Invalid(held[c]) THEN "retiring" ELSE "idle"]
-    /\ phase' = [phase EXCEPT ![c] = "ready"]
-    /\ held' = [held EXCEPT ![c] = 0]
+Release(c, r) ==
+    /\ phase[c] = "holding" /\ r \in held[c]
+    /\ state' = [state EXCEPT ![r] = IF Invalid(r) THEN "retiring" ELSE "idle"]
+    /\ phase' = [phase EXCEPT ![c] = IF held[c] = {r} THEN "ready" ELSE "holding"]
+    /\ held' = [held EXCEPT ![c] = @ \ {r}]
     /\ permits' = permits - 1
     /\ UNCHANGED <<mode, caller, origin, stale, abandoned,
                     obligations, destroyed, closed, closeReturned>>
 
-Destroy(c) ==
-    /\ phase[c] = "holding"
-    /\ state' = [state EXCEPT ![held[c]] = "destroying"]
-    /\ phase' = [phase EXCEPT ![c] = "ready"]
-    /\ held' = [held EXCEPT ![c] = 0]
+Destroy(c, r) ==
+    /\ phase[c] = "holding" /\ r \in held[c]
+    /\ state' = [state EXCEPT ![r] = "destroying"]
+    /\ phase' = [phase EXCEPT ![c] = IF held[c] = {r} THEN "ready" ELSE "holding"]
+    /\ held' = [held EXCEPT ![c] = @ \ {r}]
     \* Destroy retains both membership and its permit during the callback.
     /\ UNCHANGED <<mode, caller, origin, stale, abandoned, permits,
                     obligations, destroyed, closed, closeReturned>>
 
-Hijack(c) ==
-    /\ phase[c] = "holding"
-    /\ state' = [state EXCEPT ![held[c]] = "hijacked"]
-    /\ phase' = [phase EXCEPT ![c] = "ready"]
-    /\ held' = [held EXCEPT ![c] = 0]
+Hijack(c, r) ==
+    /\ phase[c] = "holding" /\ r \in held[c]
+    /\ state' = [state EXCEPT ![r] = "hijacked"]
+    /\ phase' = [phase EXCEPT ![c] = IF held[c] = {r} THEN "ready" ELSE "holding"]
+    /\ held' = [held EXCEPT ![c] = @ \ {r}]
     /\ permits' = permits - 1
     /\ obligations' = obligations - 1
     /\ UNCHANGED <<mode, caller, origin, stale, abandoned, destroyed, closed, closeReturned>>
 
-Relinquish(c) == Release(c) \/ Destroy(c) \/ Hijack(c)
+Relinquish(c) == \E r \in Resources : Release(c, r) \/ Destroy(c, r) \/ Hijack(c, r)
 
 FinishDestructor(r) ==
     /\ state[r] \in {"destroying", "retiring"}
@@ -224,6 +240,7 @@ Next ==
     \/ \E c \in Clients :
           (\E kind \in {"acquire", "try", "create"} : Begin(c, kind))
           \/ Reserve(c) \/ LeaveWait(c) \/ Admit(c) \/ Relinquish(c)
+          \/ (\E batch \in SUBSET Idle : AcquireAllIdle(c, batch))
     \/ \E r \in Resources : CancelConstruction(r) \/ CompleteConstruction(r)
           \/ Handoff(r) \/ FinishDestructor(r) \/ RemoveDestroyed(r)
     \/ Reset \/ Close \/ FinishClose
@@ -241,7 +258,7 @@ Spec == Init /\ [][Next]_vars
 TypeOK ==
     /\ phase \in [Clients -> {"ready", "waitingPermit", "reserved", "constructing", "holding"}]
     /\ mode \in [Clients -> {"acquire", "try", "create"}]
-    /\ held \in [Clients -> Resources \cup {0}]
+    /\ held \in [Clients -> SUBSET Resources]
     /\ state \in [Resources -> States]
     /\ caller \in [Resources -> Clients]
     /\ origin \in [Resources -> {"acquire", "try", "create"}]
@@ -254,10 +271,10 @@ CapacityBound == Cardinality(Listed) <= Capacity
 PermitAccounting == permits = Cardinality(Reservations) + Cardinality(TokenResources)
 CleanupAccounting == obligations = Cardinality(Outstanding)
 ExclusiveOwnership ==
-    /\ \A c \in Clients : (phase[c] = "holding") <=> (held[c] # 0)
-    /\ \A c \in Clients : held[c] # 0 => state[held[c]] = "acquired"
-    /\ \A c, d \in Clients : (held[c] # 0 /\ held[c] = held[d]) => c = d
-    /\ \A r \in Resources : state[r] = "acquired" => \E c \in Clients : held[c] = r
+    /\ \A c \in Clients : (phase[c] = "holding") <=> (held[c] # {})
+    /\ \A c \in Clients : held[c] \subseteq InState({"acquired"})
+    /\ \A c, d \in Clients : c # d => held[c] \intersect held[d] = {}
+    /\ \A r \in Resources : state[r] = "acquired" => \E c \in Clients : r \in held[c]
 IdleValid == /\ Idle \intersect stale = {}
              /\ closed => Idle = {}
 DestructionValid == destroyed = InState({"removing", "dead"})

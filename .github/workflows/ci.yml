@@ -33,7 +33,7 @@ jobs:
       run: go test -v -race ./...
 
   model:
-    name: Lifecycle model
+    name: Pool models
     runs-on: ubuntu-22.04
     timeout-minutes: 15
 
@@ -43,5 +43,5 @@ jobs:
       with:
         distribution: temurin
         java-version: "17"
-    - name: Check lifecycle model and reject known-bug mutations
+    - name: Check lifecycle and batch models and reject mutations
       run: sh model/check.sh

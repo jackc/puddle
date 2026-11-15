@@ -74,6 +74,34 @@ constructor and reports its error. Successful construction made invalid by
 invalidation by `Reset` destroys it but returns nil. A constructor error takes
 precedence over this post-construction close check.
 
+## Batch acquisition
+
+`AcquireAllIdle` transfers ownership of a batch of idle resources without
+constructing new resources or changing acquisition counters and durations.
+Resource counts do change from idle to acquired. Each returned handle is owned
+and relinquished independently, with the same reset and close rules as an
+ordinary acquire.
+
+With no competing permit reservations, it returns all idle resources. A
+concurrent operation can reserve a permit before taking the pool mutex, so
+`AcquireAllIdle` may return fewer resources even while some remain idle. In
+particular, a concurrent `CreateResource` may reserve capacity and then reject
+a full pool without consuming an idle resource. There is no unconditional
+guarantee that other concurrent calls will consume every omitted resource.
+
+The batch operation holds the pool mutex while attempting to acquire permits
+in decreasing powers of two. Other callers may reserve permits between those
+attempts, but cannot change the idle stack or return permits through pool
+release paths until the mutex is unlocked. With the pinned semaphore version,
+canceling a call that has already been granted its permit does not refund that
+permit before pool admission. The focused model relies on these assumptions.
+
+After popping its batch, the operation starts a new idle generation. Remaining
+older idle entries are preferred over resources subsequently released into the
+pool. Within a generation, resources are used in LIFO order. This preserves
+selection order, without promising that an acquire will eventually occur or
+that reset/close cannot retire the remaining entries first.
+
 ## Reset
 
 `Reset` increments the reset generation, removes all idle resources, and starts
@@ -133,7 +161,8 @@ the verification scope. The model assumes Go synchronization primitives work
 according to their contracts; the race-enabled implementation tests complement
 that assumption.
 
-`AcquireAllIdle` and the generational idle stack retain their documented
-behavior and existing tests. They also participate in lifecycle stress tests,
-but their batch selection and ordering algorithm is not in this first model.
-Statistics durations and timestamp semantics are not modeled.
+The lifecycle model includes abstract batch ownership. A separate focused model
+checks incremental batch selection and the concrete generational stack against
+an independent ordering specification. Their scopes and assumptions are in
+[model/README.md](model/README.md). Statistics durations and timestamp semantics
+are not modeled.

@@ -315,6 +315,96 @@ func TestPoolDestroyRetainsCapacityUntilDestructorReturns(t *testing.T) {
 	})
 }
 
+func TestPoolAcquireAllIdleLifecycle(t *testing.T) {
+	for _, interrupt := range []string{"Reset", "Close"} {
+		t.Run(interrupt, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				finishDestruction := make(chan struct{})
+				var finishOnce sync.Once
+				destroyed := make(chan int, 3)
+				constructor, _ := createConstructor()
+				pool, err := puddle.NewPool(&puddle.Config[int]{
+					MaxSize:     3,
+					Constructor: constructor,
+					Destructor: func(id int) {
+						destroyed <- id
+						<-finishDestruction
+					},
+				})
+				require.NoError(t, err)
+				owned := make(map[*puddle.Resource[int]]bool)
+				defer func() {
+					finishOnce.Do(func() { close(finishDestruction) })
+					for res := range owned {
+						res.Release()
+					}
+					pool.Close()
+				}()
+				for range 3 {
+					require.NoError(t, pool.CreateResource(context.Background()))
+				}
+				before := pool.Stat()
+				batch := pool.AcquireAllIdle()
+				for _, res := range batch {
+					owned[res] = true
+				}
+				require.Len(t, batch, 3)
+				after := pool.Stat()
+				require.EqualValues(t, 3, after.AcquiredResources())
+				require.Zero(t, after.IdleResources())
+				require.Equal(t, before.AcquireCount(), after.AcquireCount())
+				require.Equal(t, before.AcquireDuration(), after.AcquireDuration())
+				require.Equal(t, before.EmptyAcquireCount(), after.EmptyAcquireCount())
+				require.Equal(t, before.EmptyAcquireWaitTime(), after.EmptyAcquireWaitTime())
+				require.Equal(t, before.CanceledAcquireCount(), after.CanceledAcquireCount())
+				wantDestroyed := []int{batch[0].Value(), batch[1].Value()}
+				closeResults := make(chan struct{}, 2)
+				var closers sync.WaitGroup
+				startClose := func() {
+					for range 2 {
+						closers.Go(func() {
+							pool.Close()
+							closeResults <- struct{}{}
+						})
+					}
+				}
+				if interrupt == "Reset" {
+					pool.Reset()
+				} else {
+					startClose()
+					synctest.Wait()
+					require.Empty(t, closeResults, "Close must wait for the whole batch")
+				}
+				require.Empty(t, pool.AcquireAllIdle())
+				batch[0].ReleaseUnused()
+				delete(owned, batch[0])
+				batch[1].Destroy()
+				delete(owned, batch[1])
+				batch[2].Hijack()
+				delete(owned, batch[2])
+				if interrupt == "Reset" {
+					startClose()
+				}
+				synctest.Wait()
+				require.Empty(t, closeResults, "Close must wait for both destructors")
+				require.Len(t, destroyed, 2)
+				require.Zero(t, pool.Stat().IdleResources(), "old batch resources must not be reused")
+				finishOnce.Do(func() { close(finishDestruction) })
+				closers.Wait()
+				synctest.Wait()
+				require.Len(t, closeResults, 2)
+				require.Zero(t, pool.Stat().TotalResources())
+				close(destroyed)
+				var gotDestroyed []int
+				for id := range destroyed {
+					gotDestroyed = append(gotDestroyed, id)
+				}
+				require.ElementsMatch(t, wantDestroyed, gotDestroyed)
+			})
+		})
+	}
+}
+
 // The ledger checks effects on actual values independently of pool statistics.
 // A seeded operation stream is reproducible; the Go scheduler is not.
 func TestStressLifecycle(t *testing.T) {
