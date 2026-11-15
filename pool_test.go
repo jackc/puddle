@@ -1331,6 +1331,8 @@ func TestStress(t *testing.T) {
 				t.Error(err)
 			}
 		},
+		// Reset while other operations and callbacks are in flight.
+		pool.Reset,
 	}
 
 	workerCount := int(poolSize) * 2
@@ -1349,7 +1351,10 @@ func TestStress(t *testing.T) {
 		})
 	}
 
-	time.AfterFunc(stressTestDur(t), func() { close(finishChan) })
+	time.AfterFunc(stressTestDur(t), func() {
+		pool.Close()
+		close(finishChan)
+	})
 	wg.Wait()
 	pool.Close()
 }

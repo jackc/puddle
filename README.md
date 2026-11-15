@@ -71,6 +71,10 @@ Puddle is stable and feature complete.
 * New features will usually not be accepted if they can be feasibly implemented in a wrapper.
 * Performance optimizations will usually not be accepted unless the performance issue rises to the level of a bug.
 
+The [lifecycle contract](LIFECYCLE.md) documents ownership, cancellation, reset,
+and shutdown guarantees. The [bounded TLA+ model](model/README.md) checks those
+guarantees alongside the race-enabled Go tests in CI.
+
 ## Supported Go Versions
 
 puddle supports the same versions of Go that are supported by the Go project: the [two most recent major releases](https://go.dev/doc/devel/release#policy). The minimum Go version is 1.26.11. CI tests this minimum alongside the latest patches of the two supported releases.
